@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alethic Insight 管理端</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+.tabs { display: flex; gap: 6px; margin: 18px 0; border-bottom: 1px solid var(--border); }
+.tab-btn {
+  padding: 8px 18px; border: none; background: none; cursor: pointer;
+  font-size: 15px; font-family: inherit; color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+.tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+.badge.draft { background: #fff7e6; color: #b45309; }
+.badge.uploaded { background: #e3f6e3; color: #15803d; }
+.badge.voided { background: #fee2e2; color: #b91c1c; }
+</style>
+</head>
+<body>
+<div class="container wide">
+  <div class="card" id="login-card">
+    <h1>Alethic Insight 管理端</h1>
+    <p class="subtitle">请输入管理员 Token（即服务端环境变量 ADMIN_TOKEN 的值）</p>
+    <label class="field-label" for="token-input">管理员 Token</label>
+    <input type="password" id="token-input" placeholder="管理 Token">
+    <button class="btn" id="login-btn">登录</button>
+    <p class="msg danger hidden" id="login-error"></p>
+  </div>
+
+  <div class="card hidden" id="main-card">
+    <div class="toolbar" style="margin-top:0">
+      <h1 style="margin:0">Alethic Insight 管理端</h1>
+      <button class="btn small secondary" id="logout-btn">退出</button>
+    </div>
+
+    <h2>招新批次</h2>
+    <div class="toolbar">
+      <select id="campaign-select" onchange="onCampaignChange()"></select>
+      <button class="btn small secondary" id="refresh-campaigns-btn">刷新批次</button>
+      <button class="btn small secondary" id="new-campaign-btn">新建批次</button>
+    </div>
+    <p class="msg" id="campaign-meta" style="font-size:13px;color:var(--muted)"></p>
+
+    <div class="card hidden" id="new-campaign-card" style="margin-bottom:16px">
+      <h2>新建招新批次</h2>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <input type="text" id="new-cid" placeholder="批次 ID（如 2026spring）" style="width:180px">
+        <input type="text" id="new-cname" placeholder="批次名称（如 2026 春季招新）" style="width:200px">
+        <input type="number" id="new-cyear" placeholder="年份" value="2026" style="width:100px">
+        <button class="btn small" id="create-campaign-btn">创建</button>
+      </div>
+      <p class="msg danger hidden" id="campaign-error"></p>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tab-apps">报名列表</button>
+      <button class="tab-btn" data-tab="tab-sessions">考试会话</button>
+      <button class="tab-btn" data-tab="tab-questions">题库</button>
+    </div>
+
+    <div id="tab-apps">
+      <div class="toolbar">
+        <input type="text" id="search-input" placeholder="按学号/姓名搜索" oninput="refreshList()">
+        <select id="intent-filter" onchange="refreshList()">
+          <option value="">全部考生</option>
+          <option value="1">仅实验室意向</option>
+          <option value="0">仅社团通道 (lab_intent=false)</option>
+        </select>
+        <select id="status-filter" onchange="refreshList()">
+          <option value="">全部状态</option>
+          <option value="applied">applied</option>
+          <option value="tested">tested</option>
+          <option value="shortlisted">shortlisted</option>
+          <option value="interviewed">interviewed</option>
+          <option value="admitted">admitted</option>
+          <option value="rejected">rejected</option>
+        </select>
+        <button class="btn small secondary" id="export-btn">导出 CSV</button>
+        <span class="msg" id="count-label" style="color:var(--muted)"></span>
+      </div>
+      <div style="overflow:auto; max-height:70vh">
+        <table>
+          <thead>
+            <tr>
+              <th>学号</th><th>姓名</th><th>性别</th><th>班级</th><th>QQ</th>
+              <th>实验室意向</th><th>领域</th><th>明年重心</th><th>期望收获</th>
+              <th>状态</th><th>报名时间</th>
+            </tr>
+          </thead>
+          <tbody id="list-body"></tbody>
+        </table>
+      </div>
+      <p class="msg danger hidden" id="list-error"></p>
+    </div>
+
+    <div id="tab-sessions" class="hidden">
+      <div class="toolbar">
+        <input type="text" id="session-search" placeholder="按学号/姓名搜索" oninput="refreshSessions()">
+        <button class="btn small secondary" id="refresh-sessions-btn">刷新</button>
+        <span class="msg" id="session-count" style="color:var(--muted)"></span>
+      </div>
+      <div style="overflow:auto; max-height:70vh">
+        <table>
+          <thead>
+            <tr>
+              <th>学号</th><th>姓名</th><th>轨迹</th><th>状态</th><th>换题</th>
+              <th>领域</th><th>机器标识</th><th>开考时间</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="session-body"></tbody>
+        </table>
+      </div>
+      <p class="msg danger hidden" id="session-error"></p>
+    </div>
+
+    <div id="tab-questions" class="hidden">
+      <div class="card hidden" id="new-question-card" style="margin-bottom:16px">
+        <h2>新增题目</h2>
+        <div style="display:grid;gap:10px;grid-template-columns:1fr 1fr">
+          <select id="new-q-domain"><option value="">领域…</option></select>
+          <select id="new-q-track"><option value="">轨迹…</option></select>
+        </div>
+        <label class="field-label">标题</label>
+        <input type="text" id="new-q-title" placeholder="短标题（如：Transformer 注意力机制）">
+        <label class="field-label">题目正文（开放题，下发给考生）</label>
+        <textarea id="new-q-body" rows="5" placeholder="题目描述、要求、评分提示（评分标准不随题目下发）"></textarea>
+        <button class="btn small" id="create-question-btn">保存题目</button>
+        <p class="msg danger hidden" id="question-error"></p>
+      </div>
+      <div class="toolbar">
+        <select id="q-domain-filter" onchange="refreshQuestions()"><option value="">全部领域</option></select>
+        <select id="q-track-filter" onchange="refreshQuestions()">
+          <option value="">全部轨迹</option>
+          <option value="track1">研发型</option>
+          <option value="track2">实操型</option>
+        </select>
+        <select id="q-active-filter" onchange="refreshQuestions()">
+          <option value="">全部状态</option>
+          <option value="1">启用</option>
+          <option value="0">停用</option>
+        </select>
+        <button class="btn small secondary" id="new-question-btn">新增题目</button>
+        <span class="msg" id="question-count" style="color:var(--muted)"></span>
+      </div>
+      <div style="overflow:auto; max-height:70vh">
+        <table>
+          <thead>
+            <tr>
+              <th>领域</th><th>轨迹</th><th>标题</th><th>正文</th><th>状态</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="question-body"></tbody>
+        </table>
+      </div>
+      <p class="msg" style="font-size:13px;color:var(--muted)">
+        考核完（active=0）的题目将不再下发给考生，可保留备查。题目与评分标准视为敏感材料，仅存在于服务器，不下发到考试机安装包。
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+const TOKEN_KEY = 'aletnic_admin_token';
+const DOMAIN_LABELS = {
+  llm_arch: '语言/LLM', cv_arch: 'CV', vlm_align: 'VLM/MLLM', rl: 'RL',
+  agent: 'Agent', memory: '记忆系统', infra: 'AI Infra', aix: 'AI+X', ai_safety: 'AI 安全'
+};
+const TRACK_LABELS = { track1: '研发型', track2: '实操型', track3: '自由创作' };
+const TRACK_OPTIONS = [{ v: 'track1', t: '研发型（理论/概念导向）' }, { v: 'track2', t: '实操型（落地实践）' }, { v: 'track3', t: '自由创作型' }];
+const FOCUS_LABELS = { grades: '绩点学业', student_work: '学生工作', research: '科研', project: '项目经验' };
+const GENDER_LABELS = { male: '男', female: '女' };
+const STATUS_LABELS = { applied: '已报名', tested: '已机试', shortlisted: '预选上榜', interviewed: '已面试', admitted: '录取', rejected: '未录取' };
+const SESSION_STATUS_LABELS = { draft: '开考中', uploaded: '已交卷', voided: '已作废' };
+
+let campaigns = [];
+
+function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
+function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+
+function authHeaders() {
+  return {
+    'Authorization': 'Bearer ' + getToken(),
+    'Content-Type': 'application/json'
+  };
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
+  if (res.status === 401 && !path.startsWith('/api/admin')) {
+    showLogin();
+    throw new Error('登录已失效');
+  }
+  return res;
+}
+
+function showLogin() {
+  document.getElementById('login-card').classList.remove('hidden');
+  document.getElementById('main-card').classList.add('hidden');
+}
+
+function showMain() {
+  document.getElementById('login-card').classList.add('hidden');
+  document.getElementById('main-card').classList.remove('hidden');
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function nowLabel(iso) { return (iso || '').slice(0, 16).replace('T', ' '); }
+
+async function login() {
+  const token = document.getElementById('token-input').value.trim();
+  const errEl = document.getElementById('login-error');
+  errEl.classList.add('hidden');
+  if (!token) { errEl.textContent = '请输入 Token'; errEl.classList.remove('hidden'); return; }
+  const res = await fetch('/api/admin/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token })
+  });
+  if (!res.ok) {
+    errEl.textContent = 'Token 无效';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  setToken(token);
+  showMain();
+  await loadCampaigns();
+  refreshSessions();
+  refreshQuestions();
+}
+
+function selectedCid() {
+  return document.getElementById('campaign-select').value;
+}
+
+async function loadCampaigns() {
+  const res = await api('/api/campaigns');
+  campaigns = await res.json();
+  const sel = document.getElementById('campaign-select');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  campaigns.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = `${c.name}（${c.year}）`;
+    sel.appendChild(opt);
+  });
+  if (prev && campaigns.some(c => c.id === prev)) sel.value = prev;
+  updateMeta();
+  await refreshList();
+}
+
+function updateMeta() {
+  const c = campaigns.find(x => x.id === selectedCid());
+  const meta = document.getElementById('campaign-meta');
+  if (c) meta.textContent = `批次状态：${c.status}；数据截至回收时间：${c.expires_at.slice(0, 10)}（30 天自动回收）`;
+  else meta.textContent = '暂无批次，请先新建。';
+}
+
+function onCampaignChange() {
+  updateMeta();
+  refreshList();
+  refreshSessions();
+}
+
+async function refreshList() {
+  const cid = selectedCid();
+  const tbody = document.getElementById('list-body');
+  document.getElementById('list-error').classList.add('hidden');
+  if (!cid) {
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--muted)">请先创建并选择批次</td></tr>';
+    document.getElementById('count-label').textContent = '';
+    return;
+  }
+  const q = encodeURIComponent(document.getElementById('search-input').value.trim());
+  const intent = document.getElementById('intent-filter').value;
+  const status = document.getElementById('status-filter').value;
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (intent !== '') params.set('lab_intent', intent);
+  if (status) params.set('status', status);
+  const res = await api(`/api/campaigns/${cid}/applications?${params}`);
+  const list = await res.json();
+  tbody.innerHTML = list.map(a => `
+    <tr>
+      <td>${esc(a.student_id)}</td>
+      <td>${esc(a.name)}</td>
+      <td>${GENDER_LABELS[a.gender] || a.gender}</td>
+      <td>${esc(a.class_name)}</td>
+      <td>${esc(a.qq)}</td>
+      <td>${a.lab_intent ? '✅ 是' : '⭕ 否'}</td>
+      <td>${a.domains.map(d => `<span class="field-chip">${DOMAIN_LABELS[d] || d}</span>`).join('')}</td>
+      <td>${FOCUS_LABELS[a.focus_next_year] || a.focus_next_year}</td>
+      <td style="max-width:220px">${esc(a.expectation)}</td>
+      <td>${STATUS_LABELS[a.status] || a.status}</td>
+      <td>${nowLabel(a.created_at)}</td>
+    </tr>`).join('');
+  document.getElementById('count-label').textContent = `共 ${list.length} 人`;
+}
+
+async function refreshSessions() {
+  const cid = selectedCid();
+  const tbody = document.getElementById('session-body');
+  document.getElementById('session-error').classList.add('hidden');
+  document.getElementById('session-count').textContent = '';
+  if (!cid) return;
+  const res = await api(`/api/campaigns/${cid}/exam/sessions`);
+  if (!res.ok) { document.getElementById('session-error').textContent = '加载失败'; document.getElementById('session-error').classList.remove('hidden'); return; }
+  const search = (document.getElementById('session-search').value || '').trim();
+  let list = await res.json();
+  if (search) list = list.filter(s => (s.student_id + (s.student_name || '')).includes(search));
+  tbody.innerHTML = list.map(s => `
+    <tr>
+      <td>${esc(s.student_id)}</td>
+      <td>${esc(s.student_name || '')}</td>
+      <td>${TRACK_LABELS[s.track] || s.track}</td>
+      <td><span class="badge ${s.status}">${SESSION_STATUS_LABELS[s.status] || s.status}</span></td>
+      <td>${s.rerolls} 次</td>
+      <td>${(s.domain_tags || []).map(d => `<span class="field-chip">${DOMAIN_LABELS[d] || d}</span>`).join('')}</td>
+      <td style="font-size:12px;color:var(--muted)">${esc(s.machine_id)}</td>
+      <td>${nowLabel(s.opened_at)}</td>
+      <td>${s.status === 'draft'
+        ? `<button class="btn small danger" onclick="voidSession('${s.student_id}')">作废（授权重考）</button>`
+        : ''}</td>
+    </tr>`).join('');
+  document.getElementById('session-count').textContent = `共 ${list.length} 个会话`;
+}
+
+async function voidSession(studentId) {
+  const cid = selectedCid();
+  if (!confirm(`确认作废 ${studentId} 的当前考试会话？作废后该生可重新开考。`)) return;
+  const res = await api(`/api/campaigns/${cid}/exam/void`, {
+    method: 'POST',
+    body: JSON.stringify({ student_id: studentId })
+  });
+  if (!res.ok) {
+    document.getElementById('session-error').textContent = (await res.json().catch(() => ({}))).detail || '作废失败';
+    document.getElementById('session-error').classList.remove('hidden');
+    return;
+  }
+  refreshSessions();
+}
+
+function toggleNewQuestion() {
+  document.getElementById('new-question-card').classList.toggle('hidden');
+}
+
+async function refreshQuestions() {
+  const params = new URLSearchParams();
+  const domain = document.getElementById('q-domain-filter').value;
+  const track = document.getElementById('q-track-filter').value;
+  const active = document.getElementById('q-active-filter').value;
+  if (domain) params.set('domain', domain);
+  if (track) params.set('track', track);
+  if (active !== '') params.set('active', active);
+  const res = await api(`/api/questions?${params}`);
+  if (!res.ok) return;
+  const list = await res.json();
+  document.getElementById('question-body').innerHTML = list.map(q => `
+    <tr>
+      <td>${DOMAIN_LABELS[q.domain] || q.domain}</td>
+      <td>${TRACK_LABELS[q.track] || q.track}</td>
+      <td style="max-width:200px">${esc(q.title)}</td>
+      <td style="max-width:260px">${esc(q.body)}</td>
+      <td>${q.active ? '✅ 启用' : '⭕ 停用'}</td>
+      <td>
+        <button class="btn small secondary" onclick="toggleQ('${q.id}', ${q.active ? '0' : '1'})">${q.active ? '停用' : '启用'}</button>
+        <button class="btn small danger" onclick="deleteQ('${q.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  document.getElementById('question-count').textContent = `共 ${list.length} 题`;
+}
+
+async function toggleQ(id, active) {
+  const res = await api(`/api/questions/${id}`, { method: 'PATCH', body: JSON.stringify({ active: !!active }) });
+  if (!res.ok) { alert('操作失败'); return; }
+  refreshQuestions();
+}
+
+async function deleteQ(id) {
+  if (!confirm('确认删除该题目？')) return;
+  const res = await api(`/api/questions/${id}`, { method: 'DELETE' });
+  if (!res.ok) { alert('删除失败'); return; }
+  refreshQuestions();
+}
+
+async function createQuestion() {
+  const errEl = document.getElementById('question-error');
+  errEl.classList.add('hidden');
+  const body = {
+    domain: document.getElementById('new-q-domain').value,
+    track: document.getElementById('new-q-track').value,
+    title: document.getElementById('new-q-title').value.trim(),
+    body: document.getElementById('new-q-body').value.trim(),
+    tags: []
+  };
+  if (!body.domain || !body.track || !body.title || !body.body) {
+    errEl.textContent = '请完整填写 领域/轨迹/标题/正文';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  const res = await api('/api/questions', { method: 'POST', body: JSON.stringify(body) });
+  if (!res.ok) {
+    errEl.textContent = (await res.json().catch(() => ({}))).detail || '保存失败';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  document.getElementById('new-q-title').value = '';
+  document.getElementById('new-q-body').value = '';
+  toggleNewQuestion();
+  refreshQuestions();
+}
+
+function fillSelects() {
+  const domainSel1 = document.getElementById('new-q-domain');
+  const domainSel2 = document.getElementById('q-domain-filter');
+  for (const [key, label] of Object.entries(DOMAIN_LABELS)) {
+    domainSel1.insertAdjacentHTML('beforeend', `<option value="${key}">${label}</option>`);
+    domainSel2.insertAdjacentHTML('beforeend', `<option value="${key}">${label}</option>`);
+  }
+  const trackSel = document.getElementById('new-q-track');
+  TRACK_OPTIONS.forEach(t => trackSel.insertAdjacentHTML('beforeend', `<option value="${t.v}">${t.t}</option>`));
+}
+
+function bindTabs() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-pane, .card [id^=tab-]').forEach(() => {});
+      document.querySelectorAll('[id^=tab-]').forEach(p => p.classList.add('hidden'));
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.tab).classList.remove('hidden');
+      if (btn.dataset.tab === 'tab-sessions') refreshSessions();
+      if (btn.dataset.tab === 'tab-questions') refreshQuestions();
+    });
+  });
+}
+
+function toggleNewCampaign() {
+  document.getElementById('new-campaign-card').classList.toggle('hidden');
+}
+
+async function createCampaign() {
+  const errEl = document.getElementById('campaign-error');
+  errEl.classList.add('hidden');
+  const body = {
+    id: document.getElementById('new-cid').value.trim(),
+    name: document.getElementById('new-cname').value.trim(),
+    year: parseInt(document.getElementById('new-cyear').value, 10)
+  };
+  if (!body.id || !body.name) { errEl.textContent = '请填写批次 ID 与名称'; errEl.classList.remove('hidden'); return; }
+  const res = await api('/api/campaigns', { method: 'POST', body: JSON.stringify(body) });
+  if (!res.ok) {
+    errEl.textContent = (await res.json().catch(() => ({}))).detail || '创建失败';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  const data = await res.json();
+  const sel = document.getElementById('campaign-select');
+  sel.innerHTML = '';
+  await loadCampaigns();
+  sel.value = data.id;
+  onCampaignChange();
+  toggleNewCampaign();
+  document.getElementById('new-cid').value = '';
+  document.getElementById('new-cname').value = '';
+}
+
+function exportCsv() {
+  const cid = selectedCid();
+  if (!cid) return;
+  const intent = document.getElementById('intent-filter').value;
+  const status = document.getElementById('status-filter').value;
+  const params = new URLSearchParams();
+  if (intent !== '') params.set('lab_intent', intent);
+  if (status) params.set('status', status);
+  fetch(`/api/campaigns/${cid}/applications/export.csv?${params}`, { headers: { 'Authorization': 'Bearer ' + getToken() } })
+    .then(res => {
+      if (!res.ok) throw new Error('导出失败');
+      return res.blob();
+    })
+    .then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `applications_${cid}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    })
+    .catch(e => { document.getElementById('list-error').textContent = e.message; document.getElementById('list-error').classList.remove('hidden'); });
+}
+
+document.getElementById('login-btn').addEventListener('click', login);
+document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+document.getElementById('logout-btn').addEventListener('click', () => { clearToken(); showLogin(); });
+document.getElementById('new-campaign-btn').addEventListener('click', toggleNewCampaign);
+document.getElementById('create-campaign-btn').addEventListener('click', createCampaign);
+document.getElementById('refresh-campaigns-btn').addEventListener('click', loadCampaigns);
+document.getElementById('export-btn').addEventListener('click', exportCsv);
+document.getElementById('refresh-sessions-btn').addEventListener('click', refreshSessions);
+document.getElementById('session-search').addEventListener('input', refreshSessions);
+document.getElementById('new-question-btn').addEventListener('click', toggleNewQuestion);
+document.getElementById('create-question-btn').addEventListener('click', createQuestion);
+
+fillSelects();
+bindTabs();
+
+if (getToken()) {
+  api('/api/admin/verify').then(res => res.ok ? (showMain(), loadCampaigns(), refreshSessions(), refreshQuestions()) : showLogin())
+    .catch(() => showLogin());
+} else {
+  showLogin();
+}
+</script>
+</body>
+</html>

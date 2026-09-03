@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alethic Insight 招新报名</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="container">
+  <div class="card" id="form-card">
+    <h1>Alethic Insight 报名问卷</h1>
+    <p class="subtitle">填写下方信息即可完成报名（无需注册）。机试时间、地点等信息请关注官方 QQ 群公告。</p>
+    <form id="apply-form">
+      <label class="field-label" for="student_id">学号 <span style="color:var(--danger)">*</span></label>
+      <input type="text" id="student_id" name="student_id" placeholder="8 位数字，以 0826 开头" required>
+      <p class="hint" id="student_id_hint"></p>
+
+      <label class="field-label" for="name">姓名 <span style="color:var(--danger)">*</span></label>
+      <input type="text" id="name" name="name" required>
+
+      <label class="field-label">性别 <span style="color:var(--danger)">*</span></label>
+      <div class="radio-row">
+        <label><input type="radio" name="gender" value="male" required> 男</label>
+        <label><input type="radio" name="gender" value="female"> 女</label>
+      </div>
+
+      <label class="field-label" for="class_name">班级 <span style="color:var(--danger)">*</span></label>
+      <input type="text" id="class_name" name="class_name" placeholder="例如：计科244" required>
+
+      <label class="field-label" for="qq">QQ 号 <span style="color:var(--danger)">*</span></label>
+      <input type="text" id="qq" name="qq" placeholder="5-11 位数字" required>
+
+      <label class="field-label">是否有意向加入实验室？ <span style="color:var(--danger)">*</span></label>
+      <div class="radio-row">
+        <label><input type="radio" name="lab_intent" value="1" required> 是（走实验室招新流水线）</label>
+        <label><input type="radio" name="lab_intent" value="0"> 否（走社团通道）</label>
+      </div>
+
+      <label class="field-label">意向领域（最多 3 个） <span style="color:var(--danger)">*</span></label>
+      <div class="checkbox-grid" id="domains-box"></div>
+
+      <label class="field-label">明年重心 <span style="color:var(--danger)">*</span></label>
+      <div class="radio-row" id="focus-row">
+        <label><input type="radio" name="focus_next_year" value="grades" required> 绩点学业</label>
+        <label><input type="radio" name="focus_next_year" value="student_work"> 学生工作</label>
+        <label><input type="radio" name="focus_next_year" value="research"> 科研</label>
+        <label><input type="radio" name="focus_next_year" value="project"> 项目经验</label>
+      </div>
+
+      <label class="field-label" for="expectation">期望收获</label>
+      <textarea id="expectation" name="expectation" rows="4" placeholder="选填"></textarea>
+
+      <button type="submit" class="btn" id="submit-btn">提交报名</button>
+      <p class="error hidden" id="form-error"></p>
+    </form>
+  </div>
+
+  <div class="card hidden" id="thanks-card">
+    <div class="success-panel">
+      <div class="icon">✅</div>
+      <h1>报名成功</h1>
+      <p id="thanks-message">问卷已提交，请留意官方 QQ 群中关于机试时间、地点的通知公告。</p>
+      <p style="font-size:13px;color:var(--muted)">若信息有误，可用同一学号重新进入本页并提交覆盖更新。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const DOMAINS = {
+  llm_arch: ["语言/LLM", "偏架构"],
+  cv_arch: ["CV", "偏架构"],
+  vlm_align: ["VLM/MLLM", "偏对齐"],
+  rl: ["RL", "大模型与传统决策"],
+  agent: ["Agent 编排与框架", ""],
+  memory: ["记忆系统", ""],
+  infra: ["AI Infra", ""],
+  aix: ["AI+X 交付", ""]
+};
+const MAX_DOMAINS = 3;
+
+const cid = location.pathname.split('/').filter(Boolean).pop();
+
+function renderDomains() {
+  const box = document.getElementById('domains-box');
+  box.innerHTML = '';
+  for (const [key, [name, sub]] of Object.entries(DOMAINS)) {
+    const label = document.createElement('label');
+    label.innerHTML = `<input type="checkbox" value="${key}"><span>${name}${sub ? `<br><span class="domain-en">${sub}</span>` : ''}</span>`;
+    label.querySelector('input').addEventListener('change', enforceDomainLimit);
+    box.appendChild(label);
+  }
+}
+
+function enforceDomainLimit() {
+  const checked = document.querySelectorAll('#domains-box input[type=checkbox]:checked');
+  if (checked.length > MAX_DOMAINS) {
+    checked[checked.length - 1].checked = false;
+    alert(`领域最多选择 ${MAX_DOMAINS} 个`);
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById('form-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function clearError() {
+  document.getElementById('form-error').classList.add('hidden');
+}
+
+function scrollToTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function showThanks() {
+  document.getElementById('form-card').classList.add('hidden');
+  document.getElementById('thanks-card').classList.remove('hidden');
+  scrollToTop();
+}
+
+async function submit(overwrite = false) {
+  clearError();
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  const payload = {
+    student_id: document.getElementById('student_id').value.trim(),
+    name: document.getElementById('name').value.trim(),
+    gender: document.querySelector('input[name=gender]:checked')?.value || '',
+    class_name: document.getElementById('class_name').value.trim(),
+    qq: document.getElementById('qq').value.trim(),
+    lab_intent: document.querySelector('input[name=lab_intent]:checked')?.value === '1',
+    domains: [...document.querySelectorAll('#domains-box input:checked')].map(i => i.value),
+    focus_next_year: document.querySelector('input[name=focus_next_year]:checked')?.value || '',
+    expectation: document.getElementById('expectation').value.trim(),
+    overwrite
+  };
+  try {
+    const res = await fetch(`/api/campaigns/${cid}/applications`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.status === 409) {
+      const body = await res.json();
+      if (body.detail && body.detail.existing_name) {
+        if (confirm(`该学号已有报名记录（姓名：${body.detail.existing_name}）。\n是否覆盖更新为当前填写的信息？`)) {
+          await submit(true);
+          return;
+        }
+        showError('已取消覆盖，请检查学号是否填写正确。');
+        return;
+      }
+      showError('该学号已有报名记录，请检查学号。');
+      return;
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: '网络错误' }));
+      const detail = typeof err.detail === 'string' ? err.detail
+        : Array.isArray(err.detail) ? err.detail.map(d => d.msg).join('\n') : '提交失败';
+      showError(detail);
+      return;
+    }
+    showThanks();
+  } catch (e) {
+    showError('无法连接服务器，请检查网络后重试。');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '提交报名';
+  }
+}
+
+document.getElementById('apply-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  submit(false);
+});
+
+document.getElementById('student_id').addEventListener('input', (e) => {
+  const hint = document.getElementById('student_id_hint');
+  hint.textContent = /^0826\d{4}$/.test(e.target.value.trim()) ? '✅ 学号格式正确' : '';
+});
+
+renderDomains();
+</script>
+</body>
+</html>
