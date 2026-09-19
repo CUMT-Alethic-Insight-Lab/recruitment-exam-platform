@@ -6,7 +6,6 @@ DOMAINS = {
     "agent": "Agent 编排与框架",
     "memory": "记忆系统",
     "infra": "AI Infra",
-    "aix": "AI+X 交付",
     "ai_safety": "AI 安全",
 }
 DOMAIN_KEYS = list(DOMAINS.keys())
@@ -17,6 +16,15 @@ EXAM_TRACKS = [
     {"key": "track2", "name": "实操型（落地实践）"},
     {"key": "track3", "name": "自由创作型（自选领域现场创作/已有项目增量）"},
 ]
+
+EXAM_MODES = {
+    "standard": "标准机试",
+    "own_project": "个人项目（GitHub 仓库直提）",
+    "free_creation": "领域内自由发挥（会话记录 + GitHub 链接）",
+}
+
+# exam_session.track='project' 的展示名（个人项目轨直提，不经 enroll 开考）
+PROJECT_TRACK_NAME = "个人项目（GitHub 仓库）"
 
 GENDERS = {"male": "男", "female": "女"}
 

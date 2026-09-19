@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alethic Insight · 登录</title>
+<link rel="stylesheet" href="__PREFIX__/static/css/style.css">
+<style>
+/* 登录成功全屏欢迎动效（遮罩跟主题走，深色下不再是死白一片） */
+.welcome-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 42%, var(--check-bg), var(--bg) 70%);
+  opacity: 0;
+  animation: overlay-in .35s ease forwards;
+}
+@keyframes overlay-in { to { opacity: 1; } }
+
+.welcome-avatar {
+  width: 88px; height: 88px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--primary); color: #fff;
+  font-size: 38px; font-weight: 700; line-height: 1;
+  box-shadow: 0 6px 24px rgba(47, 111, 237, .35);
+  overflow: hidden; user-select: none;
+  animation: avatar-pop .6s cubic-bezier(.34, 1.56, .64, 1) .15s both;
+}
+.welcome-avatar img {
+  width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block;
+}
+@keyframes avatar-pop {
+  from { transform: scale(.8); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+.welcome-text {
+  margin-top: 20px; font-size: 24px; font-weight: 600; color: var(--text);
+  animation: text-rise .5s ease .5s both;
+}
+.welcome-sub {
+  margin-top: 6px; font-size: 14px; color: var(--muted);
+  animation: text-rise .5s ease .65s both;
+}
+.welcome-manual {
+  margin-top: 14px; font-size: 14px; color: var(--primary);
+  animation: text-rise .5s ease both;
+}
+@keyframes text-rise {
+  from { transform: translateY(16px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+</style>
+</head>
+<body>
+__TOPBAR__
+<div class="container">
+  <div class="card" id="login-card">
+    <h1>登录</h1>
+    <p class="subtitle">使用学号登录；首次登录密码即学号本身。报名前请先填写报名问卷。</p>
+
+    <label class="field-label" for="student_id">学号</label>
+    <input type="text" id="student_id" placeholder="8 位数字" autocomplete="username">
+
+    <label class="field-label" for="password">密码</label>
+    <input type="password" id="password" autocomplete="current-password">
+
+    <button class="btn block" id="login-btn">登录</button>
+    <p class="msg danger hidden" id="login-error"></p>
+    <p class="hint">还没有账号？<a id="apply-link">去报名</a>（填写报名问卷即自动建档）</p>
+    <p class="hint hidden" id="apply-hint">当前没有开放报名的届次</p>
+  </div>
+</div>
+
+<div class="welcome-overlay hidden" id="welcome-overlay" aria-live="polite">
+  <div class="welcome-avatar" id="welcome-avatar"></div>
+  <div class="welcome-text" id="welcome-text"></div>
+  <div class="welcome-sub" id="welcome-sub">正在进入…</div>
+  <a class="welcome-manual hidden" id="welcome-manual" href="__PREFIX__/account">如果长时间停留，点此手动进入</a>
+  <button class="welcome-manual hidden" id="welcome-cancel" type="button" style="background:none;border:none;cursor:pointer">返回登录（关闭动画）</button>
+</div>
+
+<script>
+const STUDENT_TOKEN_KEY = 'alethic_session';
+const STUDENT_ID_KEY = 'alethic_student_id';
+const CID_KEY = 'alethic_cid';
+const ADMIN_TOKEN_KEY = 'alethic_admin_token';
+
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return bytes;
+}
+function bytesToHex(buf) {
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+async function clientHash(password, saltHex) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: hexToBytes(saltHex), iterations: 100000 },
+    key, 256);
+  return bytesToHex(bits);
+}
+
+function showErr(msg) {
+  const el = document.getElementById('login-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function clearErr() {
+  document.getElementById('login-error').classList.add('hidden');
+}
+
+async function errDetail(res, fallback) {
+  const data = await res.json().catch(() => ({}));
+  return (typeof data.detail === 'string' && data.detail) || fallback;
+}
+
+function setApplyLink(cid) {
+  document.getElementById('apply-link').href = `__PREFIX__/apply/${encodeURIComponent(cid)}`;
+}
+
+async function loadLatestOpenCampaign() {
+  const link = document.getElementById('apply-link');
+  const hint = document.getElementById('apply-hint');
+  try {
+    const res = await fetch('__PREFIX__/api/campaigns/latest-open');
+    if (!res.ok) throw new Error('no open campaign');
+    const { id } = await res.json();
+    setApplyLink(id);
+  } catch (err) {
+    link.removeAttribute('href');
+    link.classList.add('hint');
+    hint.classList.remove('hidden');
+  }
+}
+
+function showWelcome(data) {
+  // 动画只认登录按钮：非本次点击登录成功，绝不弹层
+  if (!window.__loginConfirmed) return;
+  const overlay = document.getElementById('welcome-overlay');
+  const avatarBox = document.getElementById('welcome-avatar');
+  const textEl = document.getElementById('welcome-text');
+  const subEl = document.getElementById('welcome-sub');
+
+  const display = data.nickname || data.name || data.student_id || '';
+  const initial = [...display][0] || '学';
+  avatarBox.textContent = '';
+  if (data.has_avatar) {
+    // 头像已改为登录可见：带 Bearer 拉取后 blob 化展示
+    const img = document.createElement('img');
+    img.alt = '头像';
+    fetch(`__PREFIX__/api/auth/avatar?student_id=${encodeURIComponent(data.student_id)}&t=${Date.now()}`, {
+      headers: { 'Authorization': 'Bearer ' + data.token }
+    }).then(res => {
+      if (!res.ok) throw new Error('avatar ' + res.status);
+      return res.blob();
+    }).then(blob => {
+      img.src = URL.createObjectURL(blob);
+    }).catch(() => { avatarBox.textContent = initial; });
+    avatarBox.appendChild(img);
+  } else {
+    avatarBox.textContent = initial;
+  }
+
+  if (data.role === 'admin') {
+    textEl.textContent = '欢迎管理员';
+  } else {
+    textEl.textContent = `欢迎，${display}`;
+  }
+  subEl.textContent = data.pw_changed === false
+    ? '首次登录，请先修改初始密码…'
+    : (data.role === 'admin' ? '正在进入管理端…' : '正在进入个人中心…');
+
+  overlay.classList.remove('hidden');
+  // 动画出现的同时就给逃生口：随时可关，不会被罩住
+  document.getElementById('welcome-manual').classList.add('hidden');
+  document.getElementById('welcome-cancel').classList.remove('hidden');
+  // 重新触发子元素动画
+  [avatarBox, textEl, subEl].forEach(el => {
+    el.style.animation = 'none';
+    void el.offsetWidth;
+    el.style.animation = '';
+  });
+}
+
+function gotoAfterLogin(role) {
+  var dest = role === 'admin' ? '__PREFIX__/admin' : '__PREFIX__/account';
+  window.__loginDest = dest;
+  // 主跳转：欢迎动效播完即走
+  setTimeout(function () { location.href = dest; }, 1400);
+  // 兜底：4.5 秒还在本页（跳转被拦截/页面被缓存恢复），给出手动入口
+  setTimeout(function () {
+    var link = document.getElementById('welcome-manual');
+    if (link) {
+      link.href = dest;
+      link.classList.remove('hidden');
+    }
+    var sub = document.getElementById('welcome-sub');
+    if (sub) sub.textContent = '自动跳转似乎被卡住了，可手动进入…';
+  }, 4500);
+}
+
+// bfcache 返回（后退/前进恢复的 DOM 可能留着旧欢迎层，内联脚本不会重跑）：
+// 一律先收起欢迎层，再走验真续会话。动画没有确认位就永远不出现。
+window.addEventListener('pageshow', function (e) {
+  if (!e.persisted) return;
+  window.__loginConfirmed = false;
+  document.getElementById('welcome-overlay').classList.add('hidden');
+  resumeSession();
+});
+
+// 欢迎层取消：关动画、复位确认位，回到可点的表单
+document.getElementById('welcome-cancel').addEventListener('click', function () {
+  window.__loginConfirmed = false;
+  document.getElementById('welcome-overlay').classList.add('hidden');
+  document.getElementById('welcome-manual').classList.add('hidden');
+  this.classList.add('hidden');
+});
+
+// 脚本异常直接报到页面，方便定位（替代无声卡死）
+window.addEventListener('error', function (e) {
+  showErr('页面脚本异常：' + (e.message || '未知错误') + '，请截图发给管理员');
+});
+
+async function login() {
+  clearErr();
+  const studentId = document.getElementById('student_id').value.trim();
+  const password = document.getElementById('password').value;
+  if (!/^\d{8}$/.test(studentId)) { showErr('请输入 8 位数字学号'); return; }
+  if (!password) { showErr('请输入密码'); return; }
+
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true;
+  btn.textContent = '登录中…';
+  try {
+    const res0 = await fetch(`__PREFIX__/api/auth/salt?student_id=${encodeURIComponent(studentId)}`);
+    if (!res0.ok) { showErr(await errDetail(res0, '获取登录信息失败，请稍后重试')); return; }
+    const { salt } = await res0.json();
+
+    const res = await fetch('__PREFIX__/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ student_id: studentId, client_hash: await clientHash(password, salt) })
+    });
+    if (res.status === 401) { showErr('学号或密码错误（如未报名，请先完成报名问卷）'); return; }
+    if (!res.ok) { showErr(await errDetail(res, '登录失败，请稍后重试')); return; }
+
+    const data = await res.json();
+    localStorage.setItem(STUDENT_ID_KEY, data.student_id || studentId);
+    if (data.role === 'admin') {
+      localStorage.setItem(ADMIN_TOKEN_KEY, data.token);
+      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      localStorage.removeItem(CID_KEY);
+    } else {
+      localStorage.setItem(STUDENT_TOKEN_KEY, data.token);
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+      if (data.cid !== undefined && data.cid !== null) {
+        localStorage.setItem(CID_KEY, String(data.cid));
+      }
+    }
+    // 本次点击登录成功，动画放行
+    window.__loginConfirmed = true;
+    showWelcome(data);
+    gotoAfterLogin(data.role);
+  } catch (err) {
+    showErr('无法连接服务器，请检查网络后重试');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '登录';
+  }
+}
+
+document.getElementById('login-btn').addEventListener('click', login);
+document.getElementById('password').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+document.getElementById('student_id').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('password').focus(); });
+
+loadLatestOpenCampaign();
+
+// 已登录态：先拿残留 token 去服务端验真，绝不盲信本地残留。
+// 有效 → 按身份进；失效 → 清掉留在表单页；全程不弹欢迎动画。
+async function resumeSession() {
+  var adminToken = null, studentToken = null, sid = null;
+  try {
+    adminToken = localStorage.getItem(ADMIN_TOKEN_KEY);
+    studentToken = localStorage.getItem(STUDENT_TOKEN_KEY);
+    sid = localStorage.getItem(STUDENT_ID_KEY);
+  } catch (err) { return; }
+  var token = adminToken || (studentToken && sid ? studentToken : null);
+  if (!token) return;
+  try {
+    var res = await fetch('__PREFIX__/api/auth/me', {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    if (!res.ok) throw new Error('invalid session');
+    var me = await res.json();
+    location.replace(me.role === 'admin' ? '__PREFIX__/admin' : '__PREFIX__/account');
+  } catch (err) {
+    try {
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      localStorage.removeItem(STUDENT_ID_KEY);
+      localStorage.removeItem(CID_KEY);
+    } catch (e) {}
+  }
+}
+resumeSession();
+</script>
+</body>
+</html>

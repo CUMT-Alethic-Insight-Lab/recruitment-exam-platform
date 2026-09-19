@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alethic Insight · 个人中心</title>
+<link rel="stylesheet" href="__PREFIX__/static/css/style.css">
+<style>
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+.badge.applied { background: #fff7e6; color: #b45309; }
+.badge.tested { background: #e0edff; color: #1d4ed8; }
+.badge.shortlisted { background: #ede9fe; color: #6d28d9; }
+.badge.interviewed { background: #dbeafe; color: #1d4ed8; }
+.badge.admitted { background: #e3f6e3; color: #15803d; }
+.badge.rejected { background: #fee2e2; color: #b91c1c; }
+.info-row { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14.5px; }
+.info-row:last-child { border-bottom: none; }
+.info-row .k { width: 96px; flex-shrink: 0; color: var(--muted); }
+.guide li { font-size: 14px; margin-bottom: 6px; }
+
+/* 资料卡 */
+.profile-top { display: flex; gap: 18px; align-items: center; margin-top: 10px; }
+.avatar-wrap {
+  position: relative; width: 72px; height: 72px; border-radius: 50%;
+  background: var(--primary); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30px; font-weight: 700; line-height: 1;
+  cursor: pointer; overflow: hidden; flex-shrink: 0; user-select: none;
+}
+.avatar-wrap img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.avatar-edit {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 1;
+  font-size: 11px; font-weight: 400; text-align: center;
+  background: rgba(0, 0, 0, .45); color: #fff; padding: 1px 0;
+}
+.profile-name { font-size: 17px; font-weight: 600; }
+.profile-sid, .profile-dept { font-size: 13.5px; color: var(--muted); }
+.nick-row { display: flex; gap: 8px; }
+.nick-row input { flex: 1; }
+
+/* 密码强度条 */
+.pw-meter { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+.pw-seg { width: 56px; height: 6px; border-radius: 3px; background: var(--border); transition: background .2s; }
+.pw-seg.lvl1 { background: #d93025; }
+.pw-seg.lvl2 { background: #f59e0b; }
+.pw-seg.lvl3 { background: #16a34a; }
+.pw-meter-text { font-size: 12.5px; color: var(--muted); margin-left: 6px; min-width: 20px; }
+.warn-box {
+  border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c;
+  border-radius: 8px; padding: 10px 12px; font-size: 14px; margin: 12px 0 4px;
+}
+</style>
+</head>
+<body>
+__TOPBAR__
+<div class="container">
+  <div class="card">
+    <div class="toolbar" style="margin-top:0">
+      <h1 style="margin:0">个人中心</h1>
+      <button class="btn small secondary" id="logout-btn">退出登录</button>
+    </div>
+    <div class="hidden" id="reg-incomplete-banner" style="border:1px solid #fde68a;background:#fffbeb;color:#92400e;border-radius:8px;padding:10px 12px;font-size:14px;margin:10px 0 4px">
+      ⚠️ 问卷尚未完成，你的报名还未正式生效——<a id="reg-continue-link" href="__PREFIX__/apply">点此继续报名</a>（补全问卷后报名才正式完成）。
+    </div>
+    <div id="app-info"></div>
+    <p class="msg danger hidden" id="load-error"></p>
+  </div>
+
+  <div class="card" id="profile-card">
+    <h2 style="margin-top:0">个人资料</h2>
+    <div class="profile-top">
+      <div class="avatar-wrap" id="avatar-wrap" title="点击更换头像">
+        <span id="avatar-initial"></span>
+        <img id="avatar-img" class="hidden" alt="头像">
+        <span class="avatar-edit">更换</span>
+      </div>
+      <div>
+        <div class="profile-name" id="profile-name"></div>
+        <div class="profile-sid" id="profile-sid"></div>
+        <div class="profile-dept" id="profile-dept"></div>
+      </div>
+    </div>
+    <input type="file" id="avatar-input" accept="image/png,image/jpeg,image/webp" class="hidden">
+    <p class="msg hidden" id="avatar-msg"></p>
+
+    <label class="field-label" for="nickname">昵称</label>
+    <div class="nick-row">
+      <input type="text" id="nickname" maxlength="16" placeholder="1–16 字符">
+      <button class="btn small" id="nick-save-btn">保存</button>
+    </div>
+    <p class="hint">仅支持中文、字母、数字、空格、_、-、·，首尾不能有空格</p>
+    <p class="msg hidden" id="nick-msg"></p>
+
+    <div class="warn-box hidden" id="pw-warn">检测到仍在使用初始密码（= 学号），请尽快修改密码。</div>
+    <h2>修改密码</h2>
+    <label class="field-label" for="pw-old">旧密码</label>
+    <input type="password" id="pw-old" autocomplete="current-password">
+    <label class="field-label" for="pw-new">新密码</label>
+    <input type="password" id="pw-new" autocomplete="new-password" placeholder="8–64 位，须同时包含字母和数字">
+    <div class="pw-meter" id="pw-meter">
+      <span class="pw-seg" id="pw-seg-1"></span>
+      <span class="pw-seg" id="pw-seg-2"></span>
+      <span class="pw-seg" id="pw-seg-3"></span>
+      <span class="pw-meter-text" id="pw-meter-text"></span>
+    </div>
+    <label class="field-label" for="pw-new2">确认新密码</label>
+    <input type="password" id="pw-new2" autocomplete="new-password">
+    <button class="btn" id="pw-save-btn">确认修改</button>
+    <p class="msg hidden" id="pw-msg"></p>
+  </div>
+
+  <div class="card hidden" id="project-card">
+    <h2 style="margin-top:0">提交个人项目</h2>
+    <p class="hint" style="margin-bottom:10px">你的考试方式为「个人项目（GitHub 仓库直提）」，无需下载考试机。提交 GitHub 仓库链接后即视为完成机试交付，请确认仓库为公开（或已授予评审权限）且包含完整说明。</p>
+    <div id="project-form-area">
+      <label class="field-label" for="project-url">GitHub 仓库 URL <span style="color:var(--danger)">*</span></label>
+      <input type="text" id="project-url" placeholder="https://github.com/用户名/仓库名">
+      <button class="btn" id="project-submit-btn">提交个人项目</button>
+      <p class="msg hidden" id="project-msg"></p>
+    </div>
+    <div class="success-panel hidden" id="project-submitted">
+      <div class="icon">✅</div>
+      <p id="project-submitted-text" style="margin:0">个人项目已提交。</p>
+      <p id="project-submitted-link" style="margin:6px 0 0;word-break:break-all"></p>
+    </div>
+  </div>
+
+  <div class="card" id="guide-card">
+    <h2 style="margin-top:0">机试指引</h2>
+    <ol class="guide">
+      <li>在考试机上下载并解压机试安装包，双击启动器 <strong>AlethicInsight社团招新机试平台</strong>（自检通过后会拉起作答环境与上传界面）。</li>
+      <li>在清洗上传界面的学号登录入口，用<strong>本账号</strong>（学号 + 密码）登录，云端校验通过后自动下发按你领域配置的题目。</li>
+      <li>首次登录的<strong>初始密码 = 学号</strong>，请登录后尽快在上方修改密码。</li>
+      <li>机试共三条轨迹：研发型 / 实操型 / 自由创作，不限时长，允许使用任意 AI 工具与资料（模型可接入自己的 API）。</li>
+      <li>完成后点击「结束并上传」，会话清洗件将自动上传云端；若上传失败会保留本地并在界面醒目提示。</li>
+    </ol>
+    <p class="hint hidden" id="free-creation-hint">自由创作请在上传时填写 GitHub 链接，评审将结合会话记录与仓库进行。</p>
+  </div>
+</div>
+
+<script>
+const STUDENT_TOKEN_KEY = 'alethic_session';
+const STUDENT_ID_KEY = 'alethic_student_id';
+const CID_KEY = 'alethic_cid';
+
+const DOMAIN_LABELS = {
+  llm_arch: '语言/LLM', cv_arch: 'CV', vlm_align: 'VLM/MLLM', rl: 'RL',
+  agent: 'Agent', memory: '记忆系统', infra: 'AI Infra', ai_safety: 'AI 安全'
+};
+const STATUS_LABELS = {
+  applied: '已报名', tested: '已机试', shortlisted: '预选上榜',
+  interviewed: '已面试', admitted: '录取', rejected: '未录取'
+};
+const EXAM_MODE_LABELS = {
+  standard: '标准机试', own_project: '个人项目（GitHub 仓库直提）', free_creation: '领域内自由发挥'
+};
+
+const token = localStorage.getItem(STUDENT_TOKEN_KEY);
+const studentId = localStorage.getItem(STUDENT_ID_KEY);
+let cid = localStorage.getItem(CID_KEY) || '';
+let profileName = '';
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function avatarUrl() {
+  return `__PREFIX__/api/auth/avatar?student_id=${encodeURIComponent(studentId)}&t=${Date.now()}`;
+}
+
+let hasAvatar = false;
+
+function renderAvatar(has) {
+  hasAvatar = !!has;
+  const img = document.getElementById('avatar-img');
+  const initialEl = document.getElementById('avatar-initial');
+  if (hasAvatar) {
+    // 头像已改为登录可见：带 Bearer 拉取后 blob 化展示
+    img.onload = () => {
+      img.classList.remove('hidden');
+      initialEl.classList.add('hidden');
+    };
+    fetch(avatarUrl(), { headers: { 'Authorization': 'Bearer ' + token } })
+      .then(res => {
+        if (!res.ok) throw new Error('avatar ' + res.status);
+        return res.blob();
+      })
+      .then(blob => { img.src = URL.createObjectURL(blob); })
+      .catch(() => {
+        img.classList.add('hidden');
+        initialEl.classList.remove('hidden');
+      });
+  } else {
+    img.classList.add('hidden');
+    img.removeAttribute('src');
+    initialEl.classList.remove('hidden');
+  }
+  initialEl.textContent = [...(profileName || studentId || '学')][0] || '学';
+}
+
+function renderProfile(me) {
+  profileName = me.nickname || me.name || studentId;
+  document.getElementById('profile-name').textContent = profileName;
+  document.getElementById('profile-sid').textContent = `学号 ${me.student_id || studentId}`;
+  const sid = me.student_id || studentId || '';
+  const dept = /^\d{8}$/.test(sid) ? sid.slice(0, 2) : '';
+  const enrollYear = /^\d{8}$/.test(sid) ? 2000 + parseInt(sid.slice(2, 4), 10) : '';
+  document.getElementById('profile-dept').textContent = dept ? `院系 ${dept} · ${enrollYear} 级` : '';
+  document.getElementById('nickname').value = me.nickname || '';
+  renderAvatar(!!me.has_avatar);
+}
+
+// 初始密码（pw_changed=0）：只留改密表单，其余功能改密成功后再放开
+let forcedPwMode = false;
+
+function setForcedPwMode(on) {
+  forcedPwMode = on;
+  const warn = document.getElementById('pw-warn');
+  warn.textContent = on
+    ? '仍在使用初始密码（= 学号）。首次登录或密码被重置后须先修改密码——改密前其他功能不可用。'
+    : '检测到仍在使用初始密码（= 学号），请尽快修改密码。';
+  warn.classList.toggle('hidden', !on);
+  document.getElementById('app-info').classList.toggle('hidden', on);
+  document.getElementById('reg-incomplete-banner').classList.add('hidden');
+  document.getElementById('guide-card').classList.toggle('hidden', on);
+  document.getElementById('project-card').classList.add('hidden');
+  document.getElementById('nickname').disabled = on;
+  document.getElementById('nick-save-btn').disabled = on;
+  const wrap = document.getElementById('avatar-wrap');
+  wrap.style.pointerEvents = on ? 'none' : '';
+  wrap.style.opacity = on ? '.55' : '';
+  if (on) document.getElementById('pw-old').focus();
+}
+
+async function loadMe() {
+  try {
+    const res = await fetch('__PREFIX__/api/auth/me', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (res.status === 401) {
+      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      location.replace('__PREFIX__/login');
+      return null;
+    }
+    if (!res.ok) return null;
+    const me = await res.json();
+    if (me.cid !== undefined && me.cid !== null && String(me.cid) !== cid) {
+      cid = String(me.cid);
+      localStorage.setItem(CID_KEY, cid);
+    }
+    renderProfile(me);
+    setForcedPwMode(me.pw_changed === false);
+    return me;
+  } catch (e) {
+    return null; // 网络失败时资料卡保持空白，报名信息单独提示
+  }
+}
+
+async function loadApplication() {
+  const errEl = document.getElementById('load-error');
+  errEl.classList.add('hidden');
+  const box = document.getElementById('app-info');
+  const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/applications/${encodeURIComponent(studentId)}`, {
+    headers: { 'Authorization': 'Bearer ' + token }
+  });
+  if (!res.ok) {
+    box.innerHTML = '';
+    errEl.textContent = res.status === 404
+      ? `届次 ${cid} 下未找到学号 ${studentId} 的报名记录，请确认届次是否正确。`
+      : '加载报名信息失败，请稍后刷新重试。';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  const a = await res.json();
+  box.innerHTML = `
+    <div class="info-row"><span class="k">学号</span><span>${esc(a.student_id)}</span></div>
+    <div class="info-row"><span class="k">姓名</span><span>${esc(a.name)}</span></div>
+    <div class="info-row"><span class="k">报名状态</span><span><span class="badge ${esc(a.status)}">${STATUS_LABELS[a.status] || esc(a.status)}</span></span></div>
+    <div class="info-row"><span class="k">考试方式</span><span>${EXAM_MODE_LABELS[a.exam_mode] || esc(a.exam_mode) || '标准机试'}</span></div>
+    <div class="info-row"><span class="k">意向领域</span><span>${a.domains.map(d => `<span class="field-chip">${DOMAIN_LABELS[d] || esc(d)}</span>`).join('') || '—'}</span></div>
+    <div class="info-row"><span class="k">实验室意向</span><span>${a.lab_intent ? '是' : '否（社团通道）'}</span></div>
+    <div class="info-row"><span class="k">报名时间</span><span>${esc((a.created_at || '').slice(0, 16).replace('T', ' '))}</span></div>`;
+}
+
+function showMsg(id, text, danger) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg' + (danger ? ' danger' : '');
+  if (text) el.classList.remove('hidden'); else el.classList.add('hidden');
+}
+
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return bytes;
+}
+function bytesToHex(buf) {
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+async function clientHash(password, saltHex) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: hexToBytes(saltHex), iterations: 100000 },
+    key, 256);
+  return bytesToHex(bits);
+}
+function randomSaltHex() {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return bytesToHex(b);
+}
+
+// ---------- 昵称 ----------
+function validateNickname(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return '昵称不能为空';
+  if ([...s].length > 16) return '昵称最长 16 个字符';
+  if (/[\x00-\x1f\x7f]/.test(s)) return '昵称不能包含控制字符';
+  if (!/^[\u4e00-\u9fffA-Za-z0-9 _\-·]+$/.test(s)) return '昵称仅支持中文、字母、数字、空格、_、-、·';
+  return '';
+}
+
+async function saveNickname() {
+  const nick = document.getElementById('nickname').value.trim();
+  const err = validateNickname(nick);
+  if (err) { showMsg('nick-msg', err, true); return; }
+  const btn = document.getElementById('nick-save-btn');
+  btn.disabled = true;
+  try {
+    const res = await fetch('__PREFIX__/api/auth/profile', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname: nick })
+    });
+    if (res.status === 401) {
+      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      location.replace('__PREFIX__/login');
+      return;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showMsg('nick-msg', (typeof data.detail === 'string' && data.detail) || '昵称格式不正确', true);
+      return;
+    }
+    const data = await res.json();
+    document.getElementById('nickname').value = data.nickname;
+    profileName = data.nickname || profileName;
+    document.getElementById('profile-name').textContent = profileName;
+    renderAvatar(hasAvatar);
+    showMsg('nick-msg', '昵称已保存', false);
+  } catch (e) {
+    showMsg('nick-msg', '无法连接服务器，请检查网络后重试', true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------- 头像 ----------
+function magicImageType(bytes) {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.length >= 12
+    && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+    && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+  return null;
+}
+
+async function uploadAvatar(file) {
+  showMsg('avatar-msg', '', false);
+  if (!file) return;
+  const mime = file.type === 'image/jpg' ? 'image/jpeg' : file.type;
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) {
+    showMsg('avatar-msg', '仅支持 PNG / JPEG / WebP 格式的图片', true);
+    return;
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    showMsg('avatar-msg', '头像图片不能超过 2MB', true);
+    return;
+  }
+  let magic = null;
+  try {
+    magic = magicImageType(new Uint8Array(await file.slice(0, 16).arrayBuffer()));
+  } catch (e) { /* 读取失败交给服务端校验 */ }
+  if (magic && magic !== mime) {
+    showMsg('avatar-msg', '图片文件内容与所选格式不符，请重新选择', true);
+    return;
+  }
+  if (!magic) {
+    showMsg('avatar-msg', '无法识别的图片格式，仅支持 PNG / JPEG / WebP', true);
+    return;
+  }
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('__PREFIX__/api/auth/avatar', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: fd
+    });
+    if (res.status === 401) {
+      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      location.replace('__PREFIX__/login');
+      return;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showMsg('avatar-msg', (typeof data.detail === 'string' && data.detail) || '头像上传失败，请稍后重试', true);
+      return;
+    }
+    renderAvatar(true);
+    showMsg('avatar-msg', '头像已更新', false);
+  } catch (e) {
+    showMsg('avatar-msg', '无法连接服务器，请检查网络后重试', true);
+  }
+}
+
+// ---------- 密码强度 ----------
+function passwordLevel(pw) {
+  if (pw.length < 8 || pw.length > 64) return 0;
+  const hasLower = /[a-z]/.test(pw), hasUpper = /[A-Z]/.test(pw);
+  const hasDigit = /[0-9]/.test(pw), hasSpecial = /[^A-Za-z0-9]/.test(pw);
+  if (!/[A-Za-z]/.test(pw) || !hasDigit) return 0; // 弱：未达到最低要求
+  const classes = (hasLower ? 1 : 0) + (hasUpper ? 1 : 0) + (hasDigit ? 1 : 0) + (hasSpecial ? 1 : 0);
+  if ((pw.length >= 10 && classes >= 3) || (pw.length >= 12 && classes >= 2)) return 2;
+  return 1;
+}
+
+function updateMeter() {
+  const pw = document.getElementById('pw-new').value;
+  const level = passwordLevel(pw);
+  const segClass = ['lvl1', 'lvl2', 'lvl3'];
+  for (let i = 1; i <= 3; i++) {
+    const seg = document.getElementById(`pw-seg-${i}`);
+    seg.className = 'pw-seg';
+    if (i <= level) seg.classList.add(segClass[level - 1]);
+  }
+  document.getElementById('pw-meter-text').textContent = pw ? ['弱', '中', '强'][level] : '';
+  document.getElementById('pw-save-btn').disabled = level === 0;
+}
+
+async function changePassword() {
+  showMsg('pw-msg', '', false);
+  const oldPw = document.getElementById('pw-old').value;
+  const newPw = document.getElementById('pw-new').value;
+  const newPw2 = document.getElementById('pw-new2').value;
+  if (!oldPw || !newPw) { showMsg('pw-msg', '请填写完整', true); return; }
+  if (passwordLevel(newPw) === 0) { showMsg('pw-msg', '新密码需 8–64 位，且同时包含字母和数字', true); return; }
+  if (newPw === studentId) { showMsg('pw-msg', '新密码不能与学号相同', true); return; }
+  if (newPw === oldPw) { showMsg('pw-msg', '新密码不能与旧密码相同', true); return; }
+  if (newPw !== newPw2) { showMsg('pw-msg', '两次输入的新密码不一致', true); return; }
+
+  const res0 = await fetch(`__PREFIX__/api/auth/salt?student_id=${encodeURIComponent(studentId)}`);
+  if (res0.status === 404) { showMsg('pw-msg', '未找到账号，请重新登录', true); return; }
+  if (!res0.ok) { showMsg('pw-msg', '获取盐失败，请稍后重试', true); return; }
+  const { salt } = await res0.json();
+
+  const newSalt = randomSaltHex();
+  const res = await fetch('__PREFIX__/api/auth/change_password', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      old_client_hash: await clientHash(oldPw, salt),
+      new_salt: newSalt,
+      new_client_hash: await clientHash(newPw, newSalt)
+    })
+  });
+  if (res.status === 401) { showMsg('pw-msg', '原密码错误', true); return; }
+  if (res.status === 400) {
+    const data = await res.json().catch(() => ({}));
+    showMsg('pw-msg', (typeof data.detail === 'string' && data.detail) || '新密码不符合要求', true);
+    return;
+  }
+  if (!res.ok) { showMsg('pw-msg', '修改失败，请稍后重试', true); return; }
+  showMsg('pw-msg', '密码修改成功', false);
+  document.getElementById('pw-warn').classList.add('hidden');
+  document.getElementById('pw-old').value = '';
+  document.getElementById('pw-new').value = '';
+  document.getElementById('pw-new2').value = '';
+  updateMeter();
+  if (forcedPwMode) {
+    // 强制改密完成：放开其余功能并补载报名信息/机试指引
+    setForcedPwMode(false);
+    loadApplication();
+    loadAuthMe();
+  }
+}
+
+// ---------- 个人项目 ----------
+function showProjectMsg(text, danger) {
+  showMsg('project-msg', text, danger);
+}
+
+const TRACK_LABELS = {
+  track1: '研发型', track2: '实操型', track3: '自由创作', project: '个人项目（GitHub 仓库）'
+};
+
+function showProjectSubmitted(repoUrl, track) {
+  document.getElementById('project-form-area').classList.add('hidden');
+  const box = document.getElementById('project-submitted');
+  document.getElementById('project-submitted-text').textContent = track === 'project'
+    ? '个人项目已提交（轨迹：个人项目（GitHub 仓库）），当前状态：已机试（tested），请等待评审。'
+    : '个人项目已提交。';
+  const linkEl = document.getElementById('project-submitted-link');
+  if (repoUrl) {
+    linkEl.innerHTML = `仓库链接：<a href="${esc(repoUrl)}" target="_blank" rel="noopener">${esc(repoUrl)}</a>`;
+  } else {
+    linkEl.textContent = '';
+  }
+  box.classList.remove('hidden');
+}
+
+async function submitProject() {
+  showProjectMsg('', false);
+  const url = document.getElementById('project-url').value.trim();
+  if (!/^https?:\/\/.+/.test(url)) {
+    showProjectMsg('请填写以 http:// 或 https:// 开头的 GitHub 仓库链接', true);
+    return;
+  }
+  const btn = document.getElementById('project-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  try {
+    const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/applications/me/project`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_url: url })
+    });
+    if (res.status === 409) {
+      showProjectMsg('检测到你已提交过个人项目（已有考试会话），请勿重复提交；如需重新提交请联系管理员。', true);
+      showProjectSubmitted(url);
+      return;
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const detail = typeof err.detail === 'string' ? err.detail
+        : (err.detail && err.detail.message) ? err.detail.message
+        : '提交失败，请稍后重试';
+      showProjectMsg(detail, true);
+      return;
+    }
+    const session = await res.json();
+    showProjectSubmitted(session.repo_url || url);
+    showProjectMsg('提交成功，请等待评审。', false);
+  } catch (e) {
+    showProjectMsg('无法连接服务器，请检查网络后重试。', true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '提交个人项目';
+  }
+}
+
+async function loadAuthMe() {
+  // 按届次的 auth/me 决定考试方式分支：own_project 显示项目提交表单，其余走机试指引
+  const projectCard = document.getElementById('project-card');
+  const guideCard = document.getElementById('guide-card');
+  let me = null;
+  try {
+    const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/auth/me`, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (res.ok) me = await res.json();
+  } catch (e) { /* 网络失败按默认（标准机试）展示 */ }
+  const banner = document.getElementById('reg-incomplete-banner');
+  if (me && me.registration_complete === 0) {
+    document.getElementById('reg-continue-link').href = `__PREFIX__/apply/${encodeURIComponent(cid)}`;
+    banner.classList.remove('hidden');
+  }
+  const examMode = me && me.exam_mode ? me.exam_mode : 'standard';
+  if (examMode === 'own_project') {
+    guideCard.classList.add('hidden');
+    projectCard.classList.remove('hidden');
+    if (me && me.has_session) {
+      showProjectSubmitted(null, me.track);
+    } else {
+      document.getElementById('project-submit-btn').addEventListener('click', submitProject);
+    }
+  } else {
+    projectCard.classList.add('hidden');
+    guideCard.classList.remove('hidden');
+    if (examMode === 'free_creation') {
+      document.getElementById('free-creation-hint').classList.remove('hidden');
+    }
+  }
+}
+
+async function logout() {
+  try {
+    await fetch('__PREFIX__/api/auth/logout', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+  } catch (e) { /* 网络失败也照常清理本地会话 */ }
+  localStorage.removeItem(STUDENT_TOKEN_KEY);
+  localStorage.removeItem(STUDENT_ID_KEY);
+  location.href = '__PREFIX__/login';
+}
+
+document.getElementById('nick-save-btn').addEventListener('click', saveNickname);
+document.getElementById('avatar-wrap').addEventListener('click', () => document.getElementById('avatar-input').click());
+document.getElementById('avatar-input').addEventListener('change', e => {
+  const file = e.target.files && e.target.files[0];
+  uploadAvatar(file);
+  e.target.value = '';
+});
+document.getElementById('pw-new').addEventListener('input', updateMeter);
+document.getElementById('pw-save-btn').addEventListener('click', changePassword);
+document.getElementById('logout-btn').addEventListener('click', logout);
+
+if (!token || !studentId) {
+  location.replace('__PREFIX__/login');
+} else {
+  loadMe().then(me => {
+    if (me && me.pw_changed === false) return; // 强制改密模式：改密成功后再加载其余内容
+    loadApplication();
+    loadAuthMe();
+  });
+}
+</script>
+</body>
+</html>

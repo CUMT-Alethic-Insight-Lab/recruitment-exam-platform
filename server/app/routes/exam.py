@@ -4,17 +4,24 @@ import sqlite3
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel
 
-from .. import db
-from ..auth import require_admin
+from .. import auth, db
+from ..auth import require_admin, require_applicant
 from ..constants import EXAM_TRACKS
 from ..db import DEFAULT_EXAM_CONFIG
-from ..schemas import ExamEnroll, ExamSessionOut, ExamVoid
+from ..schemas import ExamSessionOut, ExamVoid, ProjectSubmitBody, PublicQuestionOut
 from .campaigns import get_campaign_or_404, now_iso
 
 router = APIRouter(prefix="/api/campaigns", tags=["exam"])
 
 TRACK_KEYS = [t["key"] for t in EXAM_TRACKS]
+
+
+class EnrollBody(BaseModel):
+    track: str
+    question_ids: list[str] | None = None
+    student_id: str | None = None
 
 
 def exam_config_for(row: sqlite3.Row) -> dict:
@@ -39,6 +46,34 @@ def pick_questions(conn: sqlite3.Connection, domains: list[str], track: str,
         ).fetchall()
         picked.extend(rows)
     return picked
+
+
+def pick_selected_questions(conn: sqlite3.Connection,
+                            question_ids: list[str]) -> list[sqlite3.Row]:
+    """考生自选题（1-3 道且全部存在且 active），按提交顺序保序下发。"""
+    if not 1 <= len(question_ids) <= 3:
+        raise HTTPException(status_code=400, detail="自选题目数须为 1-3 道")
+    rows: list[sqlite3.Row] = []
+    for qid in question_ids:
+        row = conn.execute("SELECT * FROM question WHERE id = ?", (qid,)).fetchone()
+        if row is None or not row["active"]:
+            raise HTTPException(status_code=400, detail=f"题目不存在或未开放: {qid}")
+        rows.append(row)
+    return rows
+
+
+def check_track3_domains(qrows: list[sqlite3.Row],
+                         applicant_domains: list[str]) -> None:
+    """自由创作自选（track3）领域约束：一个领域答一道题。
+
+    ①题目领域必须都在考生报名领域内；②题目领域互不重复；③1~3 题（此处只管前两条，
+    数量与 active 校验在 pick_selected_questions 已完成）。
+    """
+    q_domains = [r["domain"] for r in qrows]
+    if any(d not in applicant_domains for d in q_domains):
+        raise HTTPException(status_code=400, detail="只能选择自己报名领域内的题目")
+    if len(set(q_domains)) != len(q_domains):
+        raise HTTPException(status_code=400, detail="同一领域只能选择一道题作答")
 
 
 def questions_to_dict(rows: list[sqlite3.Row]) -> list[dict]:
@@ -66,6 +101,9 @@ def _row_to_out(row: sqlite3.Row) -> ExamSessionOut:
         status=row["status"],
         opened_at=row["opened_at"],
         uploaded_at=row["uploaded_at"],
+        repo_url=row["repo_url"],
+        cleaned_file_path=row["cleaned_file_path"],
+        attachment_file_path=row["attachment_file_path"],
         student_name=row["student_name"] if "student_name" in row.keys() else None,
     )
 
@@ -87,7 +125,10 @@ def _serve_response(row: sqlite3.Row, cfg: dict) -> dict:
 
 
 @router.post("/{cid}/exam/enroll")
-def enroll(cid: str, body: ExamEnroll):
+def enroll(cid: str, body: EnrollBody,
+           student_id: str = Depends(require_applicant)):
+    if body.student_id and body.student_id != student_id:
+        raise HTTPException(status_code=403, detail="student_id 与登录会话不符")
     if body.track not in TRACK_KEYS:
         raise HTTPException(status_code=400, detail=f"无效轨迹: {body.track}")
     with db.connection() as conn:
@@ -96,7 +137,7 @@ def enroll(cid: str, body: ExamEnroll):
             raise HTTPException(status_code=403, detail="当前批次已收口，无法开考")
         app = conn.execute(
             "SELECT * FROM application WHERE campaign_id = ? AND student_id = ?",
-            (cid, body.student_id),
+            (cid, student_id),
         ).fetchone()
         if app is None:
             raise HTTPException(
@@ -104,10 +145,18 @@ def enroll(cid: str, body: ExamEnroll):
                 detail={"code": "no_application",
                         "message": "未找到该学号的报名记录，请先填写报名问卷（支持现场补录）"},
             )
+        if not app["registration_complete"]:
+            raise HTTPException(status_code=400, detail="请先完成报名问卷")
+        if app["exam_mode"] == "own_project":
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "own_project_no_enroll",
+                        "message": "个人项目轨请在报名页提交仓库链接"},
+            )
         existing = conn.execute(
             "SELECT * FROM exam_session WHERE campaign_id = ? AND student_id = ?"
             " AND status = 'draft' ORDER BY opened_at DESC LIMIT 1",
-            (cid, body.student_id),
+            (cid, student_id),
         ).fetchone()
         if existing is not None:
             cfg = exam_config_for(campaign)
@@ -121,7 +170,7 @@ def enroll(cid: str, body: ExamEnroll):
         prev_uploaded = conn.execute(
             "SELECT 1 FROM exam_session WHERE campaign_id = ? AND student_id = ?"
             " AND status = 'uploaded'",
-            (cid, body.student_id),
+            (cid, student_id),
         ).fetchone()
         if prev_uploaded is not None:
             raise HTTPException(
@@ -131,8 +180,15 @@ def enroll(cid: str, body: ExamEnroll):
             )
         cfg = exam_config_for(campaign)
         domains = json.loads(app["domains"])
-        per_domain = cfg["track1_per_domain"] if body.track == "track1" else cfg["track2_per_domain"]
-        qrows = [] if body.track == "track3" else pick_questions(conn, domains, body.track, per_domain)
+        if body.question_ids is not None:
+            qrows = pick_selected_questions(conn, body.question_ids)
+            if body.track == "track3":
+                check_track3_domains(qrows, domains)
+        else:
+            per_domain = (cfg["track1_per_domain"] if body.track == "track1"
+                          else cfg["track2_per_domain"])
+            qrows = ([] if body.track == "track3"
+                     else pick_questions(conn, domains, body.track, per_domain))
         sid = uuid.uuid4().hex[:16]
         token = secrets.token_urlsafe(32)
         machine_id = uuid.uuid4().hex[:16]
@@ -141,7 +197,7 @@ def enroll(cid: str, body: ExamEnroll):
             "INSERT INTO exam_session (id, campaign_id, student_id, session_token,"
             " machine_id, track, domain_tags, questions_served, status, opened_at)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)",
-            (sid, cid, body.student_id, token, machine_id, body.track,
+            (sid, cid, student_id, token, machine_id, body.track,
              json.dumps(domains, ensure_ascii=False),
              json.dumps(questions_to_dict(qrows), ensure_ascii=False), now),
         )
@@ -150,7 +206,8 @@ def enroll(cid: str, body: ExamEnroll):
 
 
 @router.post("/{cid}/exam/reroll")
-def reroll(cid: str, body: dict, x_session_token: str | None = Header(default=None)):
+def reroll(cid: str, body: dict, x_session_token: str | None = Header(default=None),
+           login_student_id: str = Depends(require_applicant)):
     sid = str(body.get("session_id", ""))
     if not sid or not x_session_token:
         raise HTTPException(status_code=400, detail="缺少会话凭证")
@@ -159,6 +216,8 @@ def reroll(cid: str, body: dict, x_session_token: str | None = Header(default=No
         row = get_session_or_404(conn, sid)
         if row["campaign_id"] != cid:
             raise HTTPException(status_code=404, detail="会话不属于该批次")
+        if row["student_id"] != login_student_id:
+            raise HTTPException(status_code=403, detail="考试会话不属于当前登录考生")
         if row["session_token"] != x_session_token:
             raise HTTPException(status_code=401, detail="会话凭证无效")
         if row["status"] != "draft":
@@ -212,3 +271,69 @@ def list_sessions(cid: str, student_id: str | None = None, _: None = Depends(req
     with db.connection() as conn:
         rows = conn.execute(sql, params).fetchall()
         return [_row_to_out(r) for r in rows]
+
+
+@router.get("/{cid}/exam/questions", response_model=list[PublicQuestionOut])
+def public_questions(cid: str, _: str = Depends(require_applicant)):
+    """考生可见的全部 active 题目（仅题面字段，绝不含 meta/评审字段）。"""
+    with db.connection() as conn:
+        get_campaign_or_404(conn, cid)
+        rows = conn.execute(
+            "SELECT id, domain, track, title, body FROM question WHERE active = 1"
+            " ORDER BY domain, track, id"
+        ).fetchall()
+        return [PublicQuestionOut(id=r["id"], domain=r["domain"], track=r["track"],
+                                  title=r["title"], body=r["body"]) for r in rows]
+
+
+@router.post("/{cid}/applications/me/project", response_model=ExamSessionOut)
+def submit_project(cid: str, body: ProjectSubmitBody,
+                   student_id: str = Depends(require_applicant)):
+    """个人项目轨考生直提 GitHub 仓库链接，直接生成已交卷会话。"""
+    repo_url = body.repo_url.strip()
+    if not repo_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="repo_url 须以 http(s):// 开头")
+    with db.connection() as conn:
+        get_campaign_or_404(conn, cid)
+        app = conn.execute(
+            "SELECT * FROM application WHERE campaign_id = ? AND student_id = ?",
+            (cid, student_id),
+        ).fetchone()
+        if app is None:
+            raise HTTPException(status_code=404, detail="未找到该学号的报名记录")
+        if not app["registration_complete"]:
+            raise HTTPException(status_code=400, detail="请先完成报名问卷")
+        if app["exam_mode"] != "own_project":
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "not_own_project",
+                        "message": "仅个人项目（GitHub 仓库直提）考生可提交仓库链接"},
+            )
+        existing = conn.execute(
+            "SELECT 1 FROM exam_session WHERE campaign_id = ? AND student_id = ?"
+            " AND status != 'voided'",
+            (cid, student_id),
+        ).fetchone()
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "already_uploaded",
+                        "message": "已存在考试会话，请勿重复提交仓库链接"},
+            )
+        sid = uuid.uuid4().hex[:16]
+        token = secrets.token_urlsafe(32)
+        now = now_iso()
+        conn.execute(
+            "INSERT INTO exam_session (id, campaign_id, student_id, session_token,"
+            " machine_id, track, domain_tags, questions_served, status, opened_at,"
+            " uploaded_at, repo_url)"
+            " VALUES (?, ?, ?, ?, 'web', 'project', '[]', '[]', 'uploaded', ?, ?, ?)",
+            (sid, cid, student_id, token, now, now, repo_url),
+        )
+        conn.execute(
+            "UPDATE application SET status = 'tested', updated_at = ?"
+            " WHERE campaign_id = ? AND student_id = ?",
+            (now, cid, student_id),
+        )
+        row = get_session_or_404(conn, sid)
+        return _row_to_out(row)

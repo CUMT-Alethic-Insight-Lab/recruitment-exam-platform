@@ -2,19 +2,6 @@ import csv
 import io
 
 
-def test_admin_verify_ok(client):
-    res = client.post("/api/admin/verify", json={"token": "test-admin-token"})
-    assert res.status_code == 200
-    assert res.json()["ok"] is True
-
-
-def test_admin_verify_bad(client):
-    res = client.post("/api/admin/verify", json={"token": "wrong"})
-    assert res.status_code == 401
-    res = client.post("/api/admin/verify", json={"token": ""})
-    assert res.status_code == 401
-
-
 def test_apply_page_served(client, cid):
     res = client.get(f"/apply/{cid}")
     assert res.status_code == 200
@@ -118,11 +105,11 @@ def test_list_and_filter(client, cid, admin_headers):
     assert all("张三" in (a["name"] + a["student_id"]) for a in res.json())
 
 
-def test_resolve_endpoint(client, cid):
-    res = client.get(f"/api/campaigns/{cid}/applications/08261234")
+def test_resolve_endpoint(client, cid, admin_headers):
+    res = client.get(f"/api/campaigns/{cid}/applications/08261234", headers=admin_headers)
     assert res.status_code == 200
     assert res.json()["name"] == "张三"
-    res = client.get(f"/api/campaigns/{cid}/applications/08269999")
+    res = client.get(f"/api/campaigns/{cid}/applications/08269999", headers=admin_headers)
     assert res.status_code == 404
 
 

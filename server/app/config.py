@@ -7,11 +7,19 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = Path(os.environ.get("ALE_THIC_DB_PATH", DATA_DIR / "alethic_insight.db"))
 
-ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
-if not ADMIN_TOKEN:
-    ADMIN_TOKEN = "dev-admin-token"
-    print("[WARN] ADMIN_TOKEN 未设置，使用开发默认值 'dev-admin-token'，生产请通过环境变量设置")
+SECRET_KEY = os.environ.get("SECRET_KEY", "")
+if not SECRET_KEY:
+    SECRET_KEY = "dev-secret-key"
+    print("[WARN] SECRET_KEY 未设置，使用开发默认值 'dev-secret-key'，生产请通过环境变量设置")
 
-STUDENT_ID_REGEX = os.environ.get("STUDENT_ID_REGEX", r"^0826\d{4}$")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "00000000")
+
+SESSION_DAYS = int(os.environ.get("SESSION_DAYS", "7"))
+
+STUDENT_ID_REGEX = os.environ.get("STUDENT_ID_REGEX", r"^\d{8}$")
 
 DATA_RETENTION_DAYS = int(os.environ.get("DATA_RETENTION_DAYS", "30"))
+
+# 反向代理路径前缀（如 '/recruitment'），nginx strip 后应用自身路由不变，
+# 仅用于替换页面里的 __PREFIX__ 占位符和 / 的重定向目标
+PUBLIC_PREFIX = os.environ.get("PUBLIC_PREFIX", "").rstrip("/")

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alethic Insight · 招新</title>
+<link rel="stylesheet" href="__PREFIX__/static/css/style.css">
+<style>
+.hero { text-align: center; padding: 36px 16px 24px; }
+.hero .logo { font-size: 34px; font-weight: 700; letter-spacing: 1px; color: var(--primary); margin: 0 0 6px; }
+.hero .tagline { color: var(--muted); font-size: 15px; margin: 0; }
+.hero-actions { margin-top: 10px; }
+.hero-actions .btn { margin: 16px 8px 0; }
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 6px; }
+.step { border: 1px solid var(--border); border-radius: 10px; padding: 14px 12px; background: var(--bg); }
+.step .num { display: inline-block; width: 26px; height: 26px; line-height: 26px; text-align: center; border-radius: 50%; background: var(--primary); color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.step h3 { font-size: 15px; margin: 0 0 4px; }
+.step p { font-size: 13px; color: var(--muted); margin: 0; }
+.footnote { font-size: 12.5px; color: var(--muted); margin: 16px 0 0; }
+</style>
+</head>
+<body>
+__TOPBAR__
+<div class="container">
+  <div class="card hero">
+    <p class="logo">Alethic Insight</p>
+    <p class="tagline">AI 技术社团 · 每年一届的招新正在进行</p>
+    <p class="tagline">不限专业、不限基础，看的是动手能力与真实增量。</p>
+    <div class="hero-actions">
+      <a class="btn home" id="apply-btn" href="__PREFIX__/login">立即报名 / 登录</a>
+      <a class="btn ghost" href="__PREFIX__/admin">管理端入口</a>
+    </div>
+    <p class="hint hidden" id="apply-hint">当前没有开放报名的届次</p>
+    <p class="footnote">报名与机试均使用学号账号登录；完成报名问卷后，你的初始密码即学号本身。</p>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">招新流程</h2>
+    <div class="steps">
+      <div class="step">
+        <span class="num">1</span>
+        <h3>报名问卷</h3>
+        <p>填写线上问卷即完成报名，无需注册。学号是全流程唯一标识。</p>
+      </div>
+      <div class="step">
+        <span class="num">2</span>
+        <h3>机试</h3>
+        <p>使用 Kimi Code 完成三选一轨迹任务（研发型 / 实操型 / 自由创作）。模型可自选，不限时长。</p>
+      </div>
+      <div class="step">
+        <span class="num">3</span>
+        <h3>评审</h3>
+        <p>考试会话清洗上传后统一评审，看增量与人类贡献，不看刷题量。</p>
+      </div>
+      <div class="step">
+        <span class="num">4</span>
+        <h3>面试</h3>
+        <p>预选考生参加面试，围绕机试作品追问，打分表在线录入。</p>
+      </div>
+      <div class="step">
+        <span class="num">5</span>
+        <h3>录取</h3>
+        <p>面试为最终裁决，公布录取名单。全部原始数据 30 天后自动回收删除。</p>
+      </div>
+    </div>
+    <p class="footnote">
+      允许使用任意 AI 工具与任何资料，题目性质决定答案无处可查；
+      是否有定势思维（照搬 / 跟风）本身是会话中的观察点。机试时间、地点请关注官方 QQ 群公告。
+    </p>
+  </div>
+</div>
+<script>
+(async () => {
+  const btn = document.getElementById('apply-btn');
+  const hint = document.getElementById('apply-hint');
+  try {
+    const res = await fetch('__PREFIX__/api/campaigns/latest-open');
+    if (!res.ok) throw new Error('no open campaign');
+    const { id } = await res.json();
+    btn.href = `__PREFIX__/apply/${encodeURIComponent(id)}`;
+  } catch (err) {
+    btn.removeAttribute('href');
+    btn.classList.add('secondary', 'small');
+    hint.classList.remove('hidden');
+  }
+})();
+</script>
+</body>
+</html>

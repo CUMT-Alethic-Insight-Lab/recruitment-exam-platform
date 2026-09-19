@@ -1,4 +1,43 @@
+/* Alethic Insight 招新站共用主题模板
+   - 浅色 :root / 深色 [data-theme="dark"]，全站只用变量，不写死颜色
+   - 深浅切换：document.documentElement.dataset.theme + localStorage 'theme'
+     （键名与官网一致，跨站记忆统一）
+   - 字体与官网同源：IBM Plex（/fonts/ 下，官网部署产物，同域绝对路径），
+     中文回落 PingFang/YaHei，与官网 font stack 一致 */
+
+/* NOTE: recruitment pages are served from the same domain as the website,
+   so absolute /fonts/* URLs reuse the website's self-hosted files. */
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("/fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("/fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("/fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
+  color-scheme: light;
   --primary: #2f6fed;
   --primary-dark: #1f56c4;
   --danger: #d93025;
@@ -7,16 +46,156 @@
   --text: #1f2733;
   --muted: #6b7280;
   --border: #e2e8f0;
+  --input-bg: #ffffff;
+  --th-bg: #f1f5f9;
+  --row-hover: #f8fafc;
+  --btn-secondary-bg: #eef2f7;
+  --btn-secondary-hover: #e2e8f0;
+  --chip-bg: #eef2f7;
+  --check-bg: rgba(47, 111, 237, .06);
+  --topbar-bg: rgba(255, 255, 255, .92);
+  /* 语义色：徽章 / 评审时间线 / 提示条（亮暗两套） */
+  --badge-amber-bg: #fff7e6; --badge-amber-fg: #b45309;
+  --badge-blue-bg: #e0edff; --badge-blue-fg: #1d4ed8;
+  --badge-purple-bg: #ede9fe; --badge-purple-fg: #6d28d9;
+  --badge-sky-bg: #dbeafe; --badge-sky-fg: #1d4ed8;
+  --badge-green-bg: #e3f6e3; --badge-green-fg: #15803d;
+  --badge-red-bg: #fee2e2; --badge-red-fg: #b91c1c;
+  --ev-user-bg: #e8f1fd; --ev-user-bar: #2563eb;
+  --ev-assistant-bg: #f1f3f6; --ev-assistant-bar: #94a3b8;
+  --warn-border: #fecaca; --warn-bg: #fef2f2; --warn-fg: #b91c1c;
+  --notice-border: #fde68a; --notice-bg: #fffbeb; --notice-fg: #92400e;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --primary: #5b8cf5;
+  --primary-dark: #8db0f8;
+  --danger: #f0716a;
+  --bg: #0f1420;
+  --card: #1a2130;
+  --text: #e8ecf3;
+  --muted: #9aa4b5;
+  --border: #2a3345;
+  --input-bg: #141b29;
+  --th-bg: #202941;
+  --row-hover: #202941;
+  --btn-secondary-bg: #242e44;
+  --btn-secondary-hover: #2e3a54;
+  --chip-bg: #242e44;
+  --check-bg: rgba(91, 140, 245, .14);
+  --topbar-bg: rgba(15, 20, 32, .92);
+  --badge-amber-bg: #3a2c12; --badge-amber-fg: #f5b94e;
+  --badge-blue-bg: #1c2c52; --badge-blue-fg: #8db0f8;
+  --badge-purple-bg: #2c2154; --badge-purple-fg: #c0a8f5;
+  --badge-sky-bg: #1a2c4e; --badge-sky-fg: #8db0f8;
+  --badge-green-bg: #14332a; --badge-green-fg: #5fd39a;
+  --badge-red-bg: #44272b; --badge-red-fg: #f0938d;
+  --ev-user-bg: #1c2c52; --ev-user-bar: #5b8cf5;
+  --ev-assistant-bg: #202941; --ev-assistant-bar: #5b6b82;
+  --warn-border: #7a3a3e; --warn-bg: #2c1c1f; --warn-fg: #f0938d;
+  --notice-border: #6b5a26; --notice-bg: #2b2517; --notice-fg: #e8c56a;
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: "IBM Plex Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
   line-height: 1.6;
+}
+
+/* ---------- 统一顶栏 ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--topbar-bg);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-inner {
+  /* 与官网 .site-header 同节奏：全宽三栏（品牌左/导航中/操作右），
+     不再用 1180 居中容器，避免两站顶栏宽度观感断裂 */
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 1.125rem 2rem;
+}
+.topbar-brand { justify-self: start; }
+.topbar-nav { justify-self: center; }
+.topbar-right {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+.topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.topbar-brand img { width: 2rem; height: 2rem; display: block; border-radius: 0.25rem; }
+.topbar-nav { display: flex; gap: 4px; }
+.topbar-nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.topbar-nav a:hover { color: var(--text); background: var(--chip-bg); }
+.topbar-auth {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.topbar-auth a { color: var(--primary); text-decoration: none; }
+.topbar-user { color: var(--text); font-weight: 600; white-space: nowrap; }
+.topbar-theme-btn {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.topbar-theme-btn:hover { border-color: var(--primary); }
+.topbar-btn {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--primary);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.topbar-btn:hover { border-color: var(--primary); }
+.topbar-btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+/* 等宽：对齐官网 header/按钮的 mono 语言 */
+.ev-tool, .topbar-auth, .topbar-btn, .topbar-theme-btn, code, pre {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+[data-theme="dark"] .topbar-btn.primary { color: #0f1420; }
+@media (max-width: 640px) {
+  .topbar-nav { display: none; }
+  .topbar-user { display: none; }
 }
 
 .container {
@@ -46,13 +225,15 @@ label.field-label {
   margin: 16px 0 6px;
 }
 
-input[type=text], input[type=number], textarea, select {
+input[type=text], input[type=number], input[type=password], textarea, select {
   width: 100%;
   padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 15px;
   font-family: inherit;
+  background: var(--input-bg);
+  color: var(--text);
 }
 input:focus, textarea:focus, select:focus {
   outline: none;
@@ -80,7 +261,7 @@ input:focus, textarea:focus, select:focus {
 }
 .checkbox-grid label:has(input:checked) {
   border-color: var(--primary);
-  background: rgba(47, 111, 237, .06);
+  background: var(--check-bg);
 }
 .checkbox-grid input { accent-color: var(--primary); flex-shrink: 0; }
 .checkbox-grid .domain-en { color: var(--muted); font-size: 12px; }
@@ -104,11 +285,20 @@ input:focus, textarea:focus, select:focus {
   font-family: inherit;
   margin-top: 24px;
 }
+[data-theme="dark"] .btn { color: #0f1420; }
 .btn:hover { background: var(--primary-dark); }
-.btn.secondary { background: #eef2f7; color: var(--text); }
-.btn.secondary:hover { background: #e2e8f0; }
+.btn.secondary { background: var(--btn-secondary-bg); color: var(--text); }
+.btn.secondary:hover { background: var(--btn-secondary-hover); }
 .btn.small { padding: 5px 12px; font-size: 13px; margin-top: 0; }
 .btn.danger { background: var(--danger); }
+[data-theme="dark"] .btn.danger { color: #0f1420; }
+/* 表单提交按钮：全宽块级，各页位置统一 */
+.btn.block { display: block; width: 100%; }
+/* 落地页 CTA：对齐官网按钮语言——实心主按钮 + 描边次按钮 */
+.btn.home { background: var(--text); color: var(--bg); }
+.btn.home:hover { background: var(--text); opacity: .85; }
+.btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn.ghost:hover { border-color: var(--primary); color: var(--primary); background: transparent; }
 
 table {
   width: 100%;
@@ -122,8 +312,8 @@ th, td {
   text-align: left;
   vertical-align: top;
 }
-th { background: #f1f5f9; font-weight: 600; position: sticky; top: 0; }
-tr:hover td { background: #f8fafc; }
+th { background: var(--th-bg); font-weight: 600; position: sticky; top: 0; }
+tr:hover td { background: var(--row-hover); }
 
 .toolbar {
   display: flex;
@@ -136,9 +326,32 @@ tr:hover td { background: #f8fafc; }
 
 .msg { font-size: 14px; margin: 8px 0; }
 .msg.danger { color: var(--danger); }
-.hidden { display: none; }
+/* 工具类必须压过一切 display 规则：页内 <style> 写在外链之后，
+   同特异度下 display:flex 等会盖掉 .hidden，导致欢迎层这类全屏罩
+   在页面加载时就罩住全页、盖住所有按钮（2026-09-08 实锤）。 */
+.hidden { display: none !important; }
 
-table .field-chip { display: inline-block; background: #eef2f7; border-radius: 6px; padding: 1px 7px; margin: 1px 3px 1px 0; font-size: 12.5px; }
+/* 意向领域等 chips：之前是 table .field-chip，个人中心 div 行匹配不上，
+    chip 样式全丢、领域名连成一串。改通用选择器，各页都生效。 */
+.field-chip { display: inline-block; background: var(--chip-bg); border-radius: 6px; padding: 1px 7px; margin: 1px 3px 1px 0; font-size: 12.5px; }
+
+/* ---------- 各页语义色暗色适配 ----------
+   各页 <style> 里的亮色写死值保持不动（即浅色主题），这里只在深色下覆盖。
+   [data-theme="dark"] 前缀带来更高特异度，压过页内后写的亮色规则。 */
+[data-theme="dark"] .badge.draft, [data-theme="dark"] .badge.applied { background: var(--badge-amber-bg); color: var(--badge-amber-fg); }
+[data-theme="dark"] .badge.uploaded, [data-theme="dark"] .badge.admitted { background: var(--badge-green-bg); color: var(--badge-green-fg); }
+[data-theme="dark"] .badge.voided, [data-theme="dark"] .badge.rejected { background: var(--badge-red-bg); color: var(--badge-red-fg); }
+[data-theme="dark"] .badge.tested { background: var(--badge-blue-bg); color: var(--badge-blue-fg); }
+[data-theme="dark"] .badge.shortlisted { background: var(--badge-purple-bg); color: var(--badge-purple-fg); }
+[data-theme="dark"] .badge.interviewed { background: var(--badge-sky-bg); color: var(--badge-sky-fg); }
+[data-theme="dark"] .ev-user { background: var(--ev-user-bg); border-left-color: var(--ev-user-bar); }
+[data-theme="dark"] .ev-assistant { background: var(--ev-assistant-bg); border-left-color: var(--ev-assistant-bar); }
+[data-theme="dark"] .ev-tool-err { color: var(--warn-fg); border-color: var(--warn-border); background: var(--warn-bg); }
+[data-theme="dark"] .iv-k3 { background: var(--row-hover); }
+[data-theme="dark"] .iv-body { background: var(--ev-assistant-bg); border-left-color: var(--ev-assistant-bar); }
+[data-theme="dark"] details.subagent.iv-safety-pick > summary { color: var(--badge-amber-fg); }
+[data-theme="dark"] .warn-box, [data-theme="dark"] .login-tip { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn-fg); }
+[data-theme="dark"] #reg-incomplete-banner { border-color: var(--notice-border) !important; background: var(--notice-bg) !important; color: var(--notice-fg) !important; }
 
 @media (max-width: 640px) {
   .card { padding: 20px 18px; }

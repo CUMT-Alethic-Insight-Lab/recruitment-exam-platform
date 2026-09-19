@@ -1,14 +1,24 @@
 import io
 import json
 import sqlite3
+from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel
 
-from .. import db
-from ..auth import require_admin
-from ..constants import MAX_DOMAINS
-from ..schemas import ApplicationCreate, ApplicationOut, domain_labels, focus_label, gender_label
+from .. import auth, db
+from ..auth import require_admin, require_applicant
+from ..constants import APPLICATION_STATUS, MAX_DOMAINS
+from ..schemas import (
+    ApplicationCreate,
+    ApplicationOut,
+    RegistrationCreate,
+    RegistrationOut,
+    domain_labels,
+    focus_label,
+    gender_label,
+)
 from .campaigns import get_campaign_or_404, now_iso
 
 router = APIRouter(prefix="/api/campaigns", tags=["applications"])
@@ -19,6 +29,17 @@ def resolve_application(conn: sqlite3.Connection, cid: str, student_id: str) -> 
         "SELECT * FROM application WHERE campaign_id = ? AND student_id = ?",
         (cid, student_id),
     ).fetchone()
+
+
+def _ensure_account(conn: sqlite3.Connection, student_id: str, name: str,
+                    salt: str, stored_hash: str, now: str) -> None:
+    """新建报名时同步建 account 行（默认密码=学号，昵称=姓名）；已有账号则不动。"""
+    conn.execute(
+        "INSERT OR IGNORE INTO account"
+        " (student_id, role, nickname, pw_salt, pw_hash, pw_changed, created_at, updated_at)"
+        " VALUES (?, 'applicant', ?, ?, ?, 0, ?, ?)",
+        (student_id, name, salt, stored_hash, now, now),
+    )
 
 
 def _row_to_out(row: sqlite3.Row) -> ApplicationOut:
@@ -33,6 +54,8 @@ def _row_to_out(row: sqlite3.Row) -> ApplicationOut:
         domains=json.loads(row["domains"]),
         focus_next_year=row["focus_next_year"],
         expectation=row["expectation"],
+        exam_mode=row["exam_mode"],
+        registration_complete=row["registration_complete"],
         status=row["status"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -58,6 +81,7 @@ def submit_application(cid: str, body: ApplicationCreate):
             "domains": json.dumps(body.domains, ensure_ascii=False),
             "focus_next_year": body.focus_next_year,
             "expectation": body.expectation,
+            "exam_mode": body.exam_mode,
             "updated_at": now,
         }
         if existing is not None:
@@ -72,23 +96,74 @@ def submit_application(cid: str, body: ApplicationCreate):
                 "UPDATE application SET name=:name, gender=:gender, class_name=:class_name,"
                 " qq=:qq, lab_intent=:lab_intent, domains=:domains,"
                 " focus_next_year=:focus_next_year, expectation=:expectation,"
-                " updated_at=:updated_at"
+                " exam_mode=:exam_mode, registration_complete=1, updated_at=:updated_at"
                 " WHERE campaign_id=:campaign_id AND student_id=:student_id",
                 params,
             )
         else:
             params["created_at"] = now
+            salt = auth.new_salt()
+            client_hash = auth.compute_client_hash(body.student_id, salt)
+            stored_hash = auth.store_hash(client_hash)
             conn.execute(
                 "INSERT INTO application (student_id, campaign_id, name, gender, class_name,"
-                " qq, lab_intent, domains, focus_next_year, expectation, status,"
-                " created_at, updated_at)"
+                " qq, lab_intent, domains, focus_next_year, expectation, exam_mode,"
+                " registration_complete, status, pw_salt, pw_hash, pw_changed, created_at, updated_at)"
                 " VALUES (:student_id, :campaign_id, :name, :gender, :class_name,"
-                " :qq, :lab_intent, :domains, :focus_next_year, :expectation, 'applied',"
-                " :created_at, :updated_at)",
-                params,
+                " :qq, :lab_intent, :domains, :focus_next_year, :expectation, :exam_mode,"
+                " 1, 'applied', :pw_salt, :pw_hash, 0, :created_at, :updated_at)",
+                {**params, "pw_salt": salt, "pw_hash": stored_hash},
             )
+            _ensure_account(conn, body.student_id, body.name, salt, stored_hash, now)
         row = resolve_application(conn, cid, body.student_id)
         return _row_to_out(row)
+
+
+@router.post("/{cid}/applications/register", response_model=RegistrationOut)
+def register(cid: str, body: RegistrationCreate):
+    """流程式注册第一步：建号（未完成）或续填（幂等），完成后需提交完整问卷。"""
+    with db.connection() as conn:
+        get_campaign_or_404(conn, cid)
+        existing = resolve_application(conn, cid, body.student_id)
+        now = now_iso()
+        if existing is not None and existing["registration_complete"]:
+            raise HTTPException(
+                status_code=409,
+                detail="该学号已完成注册，请直接登录",
+            )
+        if existing is None:
+            salt = auth.new_salt()
+            client_hash = auth.compute_client_hash(body.student_id, salt)
+            stored_hash = auth.store_hash(client_hash)
+            conn.execute(
+                "INSERT INTO application (student_id, campaign_id, name, gender, class_name,"
+                " qq, lab_intent, domains, focus_next_year, expectation, exam_mode,"
+                " registration_complete, status, pw_salt, pw_hash, pw_changed,"
+                " created_at, updated_at)"
+                " VALUES (:student_id, :campaign_id, :name, :gender, '', '', 0, '[]', '', '',"
+                " 'standard', 0, 'applied', :pw_salt, :pw_hash, 0, :now, :now)",
+                {"student_id": body.student_id, "campaign_id": cid,
+                 "name": body.name, "gender": body.gender,
+                 "pw_salt": salt, "pw_hash": stored_hash, "now": now},
+            )
+            _ensure_account(conn, body.student_id, body.name, salt, stored_hash, now)
+            message = "注册成功，请继续完成报名问卷（初始密码为您的学号）"
+        else:
+            conn.execute(
+                "UPDATE application SET name = ?, gender = ?, updated_at = ?"
+                " WHERE campaign_id = ? AND student_id = ?",
+                (body.name, body.gender, now, cid, body.student_id),
+            )
+            message = "注册信息已更新，请继续完成报名问卷（初始密码为您的学号）"
+        row = resolve_application(conn, cid, body.student_id)
+        return RegistrationOut(
+            student_id=row["student_id"],
+            campaign_id=cid,
+            name=row["name"],
+            gender=row["gender"],
+            registration_complete=row["registration_complete"],
+            message=message,
+        )
 
 
 @router.get("/{cid}/applications/export.csv")
@@ -129,8 +204,88 @@ def export_applications_csv(
     )
 
 
+class ApplicationStatusPatch(BaseModel):
+    status: str
+
+
+@router.patch("/{cid}/applications/{student_id}/status", response_model=ApplicationOut)
+def patch_application_status(
+    cid: str,
+    student_id: str,
+    body: ApplicationStatusPatch,
+    _: None = Depends(require_admin),
+):
+    if body.status not in APPLICATION_STATUS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效状态，须为 {'/'.join(APPLICATION_STATUS)} 之一",
+        )
+    with db.connection() as conn:
+        row = resolve_application(conn, cid, student_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="未找到该学号的报名记录")
+        conn.execute(
+            "UPDATE application SET status = ?, updated_at = ?"
+            " WHERE campaign_id = ? AND student_id = ?",
+            (body.status, now_iso(), cid, student_id),
+        )
+        row = resolve_application(conn, cid, student_id)
+        return _row_to_out(row)
+
+
+NOTICE_TITLE = "Alethic Insight 社团招新录取公示"
+
+
+@router.get("/{cid}/export/notice")
+def export_admission_notice(cid: str, _: None = Depends(require_admin)):
+    with db.connection() as conn:
+        campaign = get_campaign_or_404(conn, cid)
+        rows = conn.execute(
+            "SELECT * FROM application WHERE campaign_id = ? AND status = 'admitted'"
+            " ORDER BY student_id",
+            (cid,),
+        ).fetchall()
+    lines = [
+        NOTICE_TITLE,
+        "",
+        f"批次名称：{campaign['name']}",
+        "",
+        "经机试与评审，现将本批次录取名单公示如下：",
+        "",
+    ]
+    if rows:
+        lines.extend(
+            f"{i}. {r['name']}（{r['class_name']}）" for i, r in enumerate(rows, 1)
+        )
+    else:
+        lines.append("（本批次暂无录取名单）")
+    today = datetime.now()
+    lines.extend([
+        "",
+        f"公示日期：{today.year}年{today.month}月{today.day}日",
+        "Alethic Insight 社团",
+    ])
+    return Response(
+        content="\n".join(lines) + "\n",
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="notice_{cid}.txt"'},
+    )
+
+
 @router.get("/{cid}/applications/{student_id}", response_model=ApplicationOut)
-def get_application(cid: str, student_id: str):
+def get_application(
+    cid: str,
+    student_id: str,
+    request: Request,
+):
+    # 权限：管理员，或考生本人（Bearer 会话且 student_id 匹配）——档案含姓名/QQ/班级等个人信息
+    applicant_id = None
+    try:
+        applicant_id = require_applicant(request, cid)
+    except HTTPException:
+        require_admin(request)
+    if applicant_id is not None and applicant_id != student_id:
+        raise HTTPException(status_code=403, detail="只能查看本人报名档案")
     with db.connection() as conn:
         row = resolve_application(conn, cid, student_id)
         if row is None:

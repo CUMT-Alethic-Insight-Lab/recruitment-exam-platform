@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Alethic Insight 管理端</title>
-<link rel="stylesheet" href="/static/css/style.css">
+<link rel="stylesheet" href="__PREFIX__/static/css/style.css">
 <style>
 .tabs { display: flex; gap: 6px; margin: 18px 0; border-bottom: 1px solid var(--border); }
 .tab-btn {
@@ -17,15 +17,45 @@
 .badge.draft { background: #fff7e6; color: #b45309; }
 .badge.uploaded { background: #e3f6e3; color: #15803d; }
 .badge.voided { background: #fee2e2; color: #b91c1c; }
+.review-layout { display: flex; gap: 14px; align-items: flex-start; }
+.review-list { width: 280px; flex-shrink: 0; max-height: 65vh; overflow: auto; }
+.review-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; cursor: pointer; background: var(--card); }
+.review-item:hover { border-color: var(--primary); }
+.review-item.active { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.review-detail { flex: 1; min-width: 0; }
+.review-stats { font-size: 13px; color: var(--muted); margin-bottom: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.review-meta { margin-bottom: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#review-timeline { max-height: 55vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 10px; display: grid; gap: 8px; }
+.ev-time { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.ev-user { background: #e8f1fd; border-left: 3px solid #2563eb; border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+.ev-assistant { background: #f1f3f6; border-left: 3px solid #94a3b8; border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+.ev-tool { font-family: monospace; font-size: 12.5px; border: 1px dashed var(--border); border-radius: 6px; padding: 3px 8px; white-space: pre-wrap; word-break: break-word; }
+.ev-tool-err { color: #b91c1c; border-color: #fca5a5; background: #fef2f2; }
+.ev-minor { font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); padding: 2px 0; }
+details.subagent { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+details.subagent > summary { cursor: pointer; font-size: 13px; color: var(--primary); font-weight: 600; }
+.subagent-body { display: grid; gap: 8px; padding: 8px 4px 2px; }
+.iv-brief { display: grid; gap: 8px; }
+.iv-k3 { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; background: #f8fafc; }
+.iv-section-title { font-size: 14px; font-weight: 600; margin: 6px 0 0; }
+.iv-body { background: #f1f3f6; border-left: 3px solid #94a3b8; border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+.iv-meta { font-size: 13px; }
+.iv-meta strong { color: var(--muted); font-weight: 600; }
+.iv-list { margin: 2px 0 0; padding-left: 18px; }
+details.subagent.iv-safety-pick { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+details.subagent.iv-safety-pick > summary { color: #b45309; }
 </style>
 </head>
 <body>
+__TOPBAR__
 <div class="container wide">
   <div class="card" id="login-card">
     <h1>Alethic Insight 管理端</h1>
-    <p class="subtitle">请输入管理员 Token（即服务端环境变量 ADMIN_TOKEN 的值）</p>
-    <label class="field-label" for="token-input">管理员 Token</label>
-    <input type="password" id="token-input" placeholder="管理 Token">
+    <p class="subtitle">请使用管理员学号登录（与统一登录入口一致，初始密码即学号，登录后请尽快修改）</p>
+    <label class="field-label" for="username-input">学号</label>
+    <input type="text" id="username-input" placeholder="管理员学号（8 位数字）">
+    <label class="field-label" for="password-input">密码</label>
+    <input type="password" id="password-input" placeholder="密码">
     <button class="btn" id="login-btn">登录</button>
     <p class="msg danger hidden" id="login-error"></p>
   </div>
@@ -33,22 +63,46 @@
   <div class="card hidden" id="main-card">
     <div class="toolbar" style="margin-top:0">
       <h1 style="margin:0">Alethic Insight 管理端</h1>
+      <button class="btn small secondary" id="pw-toggle-btn">修改密码</button>
       <button class="btn small secondary" id="logout-btn">退出</button>
     </div>
+    <p class="msg danger hidden" id="pw-changed-warn">当前仍在使用初始密码（= 学号），请立即修改。</p>
 
-    <h2>招新批次</h2>
+    <div class="card hidden" id="pw-card" style="margin-bottom:16px">
+      <h2 style="margin-top:0">修改管理员密码</h2>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div>
+          <label class="field-label" for="pw-old">旧密码</label>
+          <input type="password" id="pw-old" style="width:160px">
+        </div>
+        <div>
+          <label class="field-label" for="pw-new">新密码</label>
+          <input type="password" id="pw-new" placeholder="至少 6 位" style="width:160px">
+        </div>
+        <div>
+          <label class="field-label" for="pw-new2">确认新密码</label>
+          <input type="password" id="pw-new2" style="width:160px">
+        </div>
+      </div>
+      <div class="toolbar">
+        <button class="btn small" id="pw-save-btn">确认修改</button>
+        <span class="msg" id="pw-msg" style="font-size:13px;color:var(--muted)"></span>
+      </div>
+    </div>
+
+    <h2>招新届次</h2>
     <div class="toolbar">
       <select id="campaign-select" onchange="onCampaignChange()"></select>
-      <button class="btn small secondary" id="refresh-campaigns-btn">刷新批次</button>
-      <button class="btn small secondary" id="new-campaign-btn">新建批次</button>
+      <button class="btn small secondary" id="refresh-campaigns-btn">刷新届次</button>
+      <button class="btn small secondary" id="new-campaign-btn">新建届次</button>
     </div>
     <p class="msg" id="campaign-meta" style="font-size:13px;color:var(--muted)"></p>
 
     <div class="card hidden" id="new-campaign-card" style="margin-bottom:16px">
-      <h2>新建招新批次</h2>
+      <h2>新建招新届次</h2>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <input type="text" id="new-cid" placeholder="批次 ID（如 2026spring）" style="width:180px">
-        <input type="text" id="new-cname" placeholder="批次名称（如 2026 春季招新）" style="width:200px">
+        <input type="text" id="new-cid" placeholder="届次 ID（如 2026spring）" style="width:180px">
+        <input type="text" id="new-cname" placeholder="届次名称（如 2026 春季招新）" style="width:200px">
         <input type="number" id="new-cyear" placeholder="年份" value="2026" style="width:100px">
         <button class="btn small" id="create-campaign-btn">创建</button>
       </div>
@@ -59,6 +113,9 @@
       <button class="tab-btn active" data-tab="tab-apps">报名列表</button>
       <button class="tab-btn" data-tab="tab-sessions">考试会话</button>
       <button class="tab-btn" data-tab="tab-questions">题库</button>
+      <button class="tab-btn" data-tab="tab-review">评审</button>
+      <button class="tab-btn" data-tab="tab-interview">面试</button>
+      <button class="tab-btn" data-tab="tab-accounts">账号管理</button>
     </div>
 
     <div id="tab-apps">
@@ -78,16 +135,21 @@
           <option value="admitted">admitted</option>
           <option value="rejected">rejected</option>
         </select>
+        <label style="font-size:14px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">
+          <input type="checkbox" id="reg-top-filter" onchange="refreshList()"> 未完成置顶
+        </label>
         <button class="btn small secondary" id="export-btn">导出 CSV</button>
+        <button class="btn small secondary" id="copy-qq-btn">复制 QQ（录取）</button>
         <span class="msg" id="count-label" style="color:var(--muted)"></span>
       </div>
+      <p class="hint" id="reg-complete-hint">「注册完成」列：完整 = 问卷已提交、报名正式生效；未完成 = 仅完成第一步基本信息、问卷尚未补全，可勾选「未完成置顶」优先跟进。</p>
       <div style="overflow:auto; max-height:70vh">
         <table>
           <thead>
             <tr>
               <th>学号</th><th>姓名</th><th>性别</th><th>班级</th><th>QQ</th>
               <th>实验室意向</th><th>领域</th><th>明年重心</th><th>期望收获</th>
-              <th>状态</th><th>报名时间</th>
+              <th>考试方式</th><th>状态</th><th>注册完成</th><th>报名时间</th>
             </tr>
           </thead>
           <tbody id="list-body"></tbody>
@@ -159,23 +221,199 @@
         考核完（active=0）的题目将不再下发给考生，可保留备查。题目与评分标准视为敏感材料，仅存在于服务器，不下发到考试机安装包。
       </p>
     </div>
+
+    <div id="tab-review" class="hidden">
+      <div class="toolbar">
+        <span style="font-size:13px;color:var(--muted)">按增量分从高到低取前</span>
+        <input type="number" id="shortlist-n" value="20" min="1" style="width:80px">
+        <span style="font-size:13px;color:var(--muted)">名已评考生</span>
+        <button class="btn small" id="gen-shortlist-btn">生成预选名单</button>
+        <span class="msg" id="shortlist-msg" style="color:var(--muted);font-size:12px"></span>
+      </div>
+      <div class="review-layout">
+        <div class="review-list" id="review-list"></div>
+        <div class="review-detail hidden" id="review-detail">
+          <div class="review-stats" id="review-stats"></div>
+          <div class="review-meta" id="review-meta"></div>
+          <div id="review-question-meta" class="hidden" style="display:grid;gap:8px;margin-bottom:10px"></div>
+          <div id="review-timeline"></div>
+          <div class="card" style="margin-top:12px">
+            <h2 style="font-size:16px;margin-top:0">评分</h2>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+              <div>
+                <label class="field-label" for="score-increment">增量分（0-100）</label>
+                <input type="number" id="score-increment" min="0" max="100" style="width:110px">
+              </div>
+              <div>
+                <label class="field-label" for="score-human">人类率（0-100）</label>
+                <input type="number" id="score-human" min="0" max="100" style="width:110px">
+              </div>
+              <div>
+                <label class="field-label" for="score-scorer">评分人</label>
+                <input type="text" id="score-scorer" style="width:140px">
+              </div>
+            </div>
+            <label class="field-label" for="score-comment">评语</label>
+            <textarea id="score-comment" rows="3"></textarea>
+            <div class="toolbar">
+              <button class="btn small" id="save-score-btn">保存评分</button>
+              <span class="msg" id="score-msg" style="color:var(--muted);font-size:12px"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="msg danger hidden" id="review-error"></p>
+    </div>
+
+    <div id="tab-interview" class="hidden">
+      <div class="toolbar">
+        <button class="btn small secondary" id="refresh-interview-btn">刷新</button>
+        <span class="msg" id="interview-count" style="color:var(--muted)"></span>
+        <span class="hint" style="margin:0">仅列出已机试（tested）及之后状态的考生，点击行展开备课卡与评分表。</span>
+      </div>
+      <div style="overflow:auto; max-height:45vh">
+        <table>
+          <thead>
+            <tr>
+              <th>姓名</th><th>学号</th><th>状态</th><th>K3 增量分</th><th>K3 人类率</th>
+              <th>面试等级</th><th>面试总分</th>
+            </tr>
+          </thead>
+          <tbody id="interview-body"></tbody>
+        </table>
+      </div>
+      <p class="msg danger hidden" id="interview-error"></p>
+
+      <div class="card hidden" id="interview-panel" style="margin-top:16px">
+        <div class="toolbar" style="margin-top:0">
+          <h2 style="font-size:16px;margin:0" id="interview-panel-title"></h2>
+          <button class="btn small secondary" id="interview-panel-close-btn">收起</button>
+        </div>
+
+        <h3 style="font-size:15px;margin:10px 0 6px">备课卡</h3>
+        <div id="interview-brief" class="iv-brief"></div>
+
+        <h3 style="font-size:15px;margin:16px 0 6px">面试评分表（M1 30% / M2 20% / M3 15% / M4 20% / M5 15%，加权满分 5）</h3>
+        <div style="overflow:auto">
+          <table>
+            <thead>
+              <tr><th>维度</th><th>分数（1~5，步长 0.5）</th><th>一句话依据</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>M1</td><td><input type="number" id="iv-m1" step="0.5" min="1" max="5" style="width:90px"></td><td><input type="text" id="iv-ev-m1" style="width:100%" placeholder="一句话依据"></td></tr>
+              <tr><td>M2</td><td><input type="number" id="iv-m2" step="0.5" min="1" max="5" style="width:90px"></td><td><input type="text" id="iv-ev-m2" style="width:100%" placeholder="一句话依据"></td></tr>
+              <tr><td>M3</td><td><input type="number" id="iv-m3" step="0.5" min="1" max="5" style="width:90px"></td><td><input type="text" id="iv-ev-m3" style="width:100%" placeholder="一句话依据"></td></tr>
+              <tr><td>M4</td><td><input type="number" id="iv-m4" step="0.5" min="1" max="5" style="width:90px"></td><td><input type="text" id="iv-ev-m4" style="width:100%" placeholder="一句话依据"></td></tr>
+              <tr><td>M5</td><td><input type="number" id="iv-m5" step="0.5" min="1" max="5" style="width:90px"></td><td><input type="text" id="iv-ev-m5" style="width:100%" placeholder="一句话依据"></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px">
+          <div>
+            <span class="field-label">证据源（track_source）</span><br>
+            <label><input type="radio" name="iv-track-source" value="A" checked> A 轨（机试会话 + 答卷）</label><br>
+            <label><input type="radio" name="iv-track-source" value="B"> B 轨（项目 commit 史 + mini-session）</label>
+          </div>
+          <div>
+            <span class="field-label">标记</span><br>
+            <label><input type="checkbox" id="iv-s-flag"> S 档疑点（进入复审）</label><br>
+            <label><input type="checkbox" id="iv-direct-channel"> 免试直面</label>
+          </div>
+        </div>
+        <label class="field-label" for="iv-inconsistency">不一致警报（S 档疑点具体说明）</label>
+        <input type="text" id="iv-inconsistency" placeholder="如：机试表现与项目 / 面试表现明显不一致之处">
+        <label class="field-label" for="iv-free-note">自由记录</label>
+        <textarea id="iv-free-note" rows="3" placeholder="面试过程中的其他观察"></textarea>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-top:8px">
+          <div>
+            <label class="field-label" for="iv-level">等级</label>
+            <select id="iv-level">
+              <option value="">自动（按加权总分计算）</option>
+              <option value="强推">强推</option>
+              <option value="推荐">推荐</option>
+              <option value="待定">待定</option>
+              <option value="不推荐">不推荐</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" for="iv-interviewer">面试官</label>
+            <input type="text" id="iv-interviewer" style="width:140px">
+          </div>
+          <button class="btn small" id="save-interview-btn">保存面试评分</button>
+          <span class="msg" id="iv-msg" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <p class="hint">等级选「自动」时不传 level，由后端按加权总分计算（S 档疑点 → 待定（S档疑点，进入复审）；≥4.2 强推；≥3.5 推荐；≥2.8 待定；否则不推荐）。保存后报名状态若尚未定档，将自动置为已面试（interviewed）。</p>
+      </div>
+    </div>
+
+    <div id="tab-accounts" class="hidden">
+      <div class="toolbar">
+        <input type="text" id="account-search" placeholder="按学号/姓名/昵称搜索" oninput="refreshAccounts()">
+        <select id="account-role-filter" onchange="refreshAccounts()">
+          <option value="">全部角色</option>
+          <option value="applicant">仅考生</option>
+          <option value="admin">仅管理员</option>
+        </select>
+        <button class="btn small secondary" id="refresh-accounts-btn">刷新</button>
+        <span class="msg" id="account-count" style="color:var(--muted)"></span>
+      </div>
+      <p class="hint">账号与角色在后台统一管理：初始密码为学号，「密码已改 = 未改」表示仍在使用初始密码。「注册完成」仅对考生账号有意义。系统最后一个管理员不可降级，也不可降级当前登录的管理员自己。</p>
+      <div style="overflow:auto; max-height:70vh">
+        <table>
+          <thead>
+            <tr>
+              <th>学号</th><th>姓名</th><th>昵称</th><th>角色</th><th>院系</th><th>入学年份</th>
+              <th>密码已改</th><th>注册完成</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="account-body"></tbody>
+        </table>
+      </div>
+      <p class="msg danger hidden" id="account-error"></p>
+    </div>
   </div>
 </div>
 
 <script>
-const TOKEN_KEY = 'aletnic_admin_token';
+const TOKEN_KEY = 'alethic_admin_token';
 const DOMAIN_LABELS = {
   llm_arch: '语言/LLM', cv_arch: 'CV', vlm_align: 'VLM/MLLM', rl: 'RL',
-  agent: 'Agent', memory: '记忆系统', infra: 'AI Infra', aix: 'AI+X', ai_safety: 'AI 安全'
+  agent: 'Agent', memory: '记忆系统', infra: 'AI Infra', ai_safety: 'AI 安全'
 };
-const TRACK_LABELS = { track1: '研发型', track2: '实操型', track3: '自由创作' };
+const TRACK_LABELS = { track1: '研发型', track2: '实操型', track3: '自由创作', project: '个人项目' };
 const TRACK_OPTIONS = [{ v: 'track1', t: '研发型（理论/概念导向）' }, { v: 'track2', t: '实操型（落地实践）' }, { v: 'track3', t: '自由创作型' }];
+const EXAM_MODE_LABELS = { standard: '标准机试', own_project: '个人项目', free_creation: '自由发挥' };
 const FOCUS_LABELS = { grades: '绩点学业', student_work: '学生工作', research: '科研', project: '项目经验' };
 const GENDER_LABELS = { male: '男', female: '女' };
 const STATUS_LABELS = { applied: '已报名', tested: '已机试', shortlisted: '预选上榜', interviewed: '已面试', admitted: '录取', rejected: '未录取' };
 const SESSION_STATUS_LABELS = { draft: '开考中', uploaded: '已交卷', voided: '已作废' };
 
 let campaigns = [];
+let currentApps = [];
+let reviewSessions = [];
+let currentReviewSid = null;
+
+function hexToBytes(hex) {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+  return bytes;
+}
+function bytesToHex(buf) {
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+async function clientHash(password, saltHex) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: hexToBytes(saltHex), iterations: 100000 },
+    key, 256);
+  return bytesToHex(bits);
+}
+function randomSaltHex() {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return bytesToHex(b);
+}
 
 function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
 function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
@@ -190,7 +428,8 @@ function authHeaders() {
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers: { ...authHeaders(), ...(opts.headers || {}) } });
-  if (res.status === 401 && !path.startsWith('/api/admin')) {
+  if (res.status === 401 && !path.startsWith('__PREFIX__/api/auth/')) {
+    clearToken();
     showLogin();
     throw new Error('登录已失效');
   }
@@ -214,25 +453,131 @@ function esc(s) {
 function nowLabel(iso) { return (iso || '').slice(0, 16).replace('T', ' '); }
 
 async function login() {
-  const token = document.getElementById('token-input').value.trim();
+  const username = document.getElementById('username-input').value.trim();
+  const password = document.getElementById('password-input').value;
   const errEl = document.getElementById('login-error');
   errEl.classList.add('hidden');
-  if (!token) { errEl.textContent = '请输入 Token'; errEl.classList.remove('hidden'); return; }
-  const res = await fetch('/api/admin/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token })
-  });
-  if (!res.ok) {
-    errEl.textContent = 'Token 无效';
+  if (!/^\d{8}$/.test(username)) { errEl.textContent = '请输入 8 位数字管理员学号'; errEl.classList.remove('hidden'); return; }
+  if (!password) { errEl.textContent = '请输入密码'; errEl.classList.remove('hidden'); return; }
+
+  // 统一登录（与 /login 入口同一套）：salt → login，role 非 admin 拒绝进入
+  const res0 = await fetch(`__PREFIX__/api/auth/salt?student_id=${encodeURIComponent(username)}`);
+  if (res0.status === 404) {
+    errEl.textContent = '未找到该账号，请确认管理员学号';
     errEl.classList.remove('hidden');
     return;
   }
-  setToken(token);
+  if (!res0.ok) {
+    errEl.textContent = '获取登录信息失败，请稍后重试';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  const { salt } = await res0.json();
+
+  const res = await fetch('__PREFIX__/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ student_id: username, client_hash: await clientHash(password, salt) })
+  });
+  if (!res.ok) {
+    errEl.textContent = res.status === 401 ? '学号或密码错误' : '登录失败，请稍后重试';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  const data = await res.json();
+  if (data.role !== 'admin') {
+    errEl.textContent = '该账号不是管理员，请用管理员学号登录（考生请走统一登录入口）';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  setToken(data.token);
+  localStorage.setItem('alethic_admin_username', data.student_id);
+  enterMain(!!data.pw_changed);
+}
+
+// 初始密码（pw_changed=0）管理员：只留改密卡与退出按钮，其余管理功能改密后再放开
+let forcedPwMode = false;
+
+function setForcedPwMode(on) {
+  forcedPwMode = on;
+  const warn = document.getElementById('pw-changed-warn');
+  warn.textContent = '当前仍在使用初始密码（= 学号），请先修改密码——改密前管理功能不可用。';
+  warn.classList.toggle('hidden', !on);
+  document.getElementById('pw-card').classList.toggle('hidden', !on);
+  document.getElementById('pw-toggle-btn').disabled = on;
+  const main = document.getElementById('main-card');
+  [...main.children].forEach(el => {
+    if (el.id === 'pw-changed-warn' || el.id === 'pw-card') return;
+    if (el.querySelector && el.querySelector('#logout-btn')) return; // 顶部工具条（含退出）保留
+    // 只还原本模式藏起来的元素，原本就隐藏的（选项卡页、新建届次卡等）保持原状
+    if (on) {
+      if (!el.classList.contains('hidden')) {
+        el.classList.add('pw-force-hidden');
+        el.classList.add('hidden');
+      }
+    } else if (el.classList.contains('pw-force-hidden')) {
+      el.classList.remove('pw-force-hidden');
+      el.classList.remove('hidden');
+    }
+  });
+  if (on) document.getElementById('pw-old').focus();
+}
+
+function enterMain(pwChanged) {
   showMain();
-  await loadCampaigns();
+  setForcedPwMode(!pwChanged);
+  if (!pwChanged) return; // 强制改密：改密前管理接口一律 403，不发起数据加载
+  loadCampaigns();
   refreshSessions();
   refreshQuestions();
+  refreshReviewSessions();
+  refreshInterviewCandidates();
+  refreshAccounts();
+}
+
+async function changeAdminPassword() {
+  const msgEl = document.getElementById('pw-msg');
+  msgEl.textContent = '';
+  const oldPw = document.getElementById('pw-old').value;
+  const newPw = document.getElementById('pw-new').value;
+  const newPw2 = document.getElementById('pw-new2').value;
+  if (!oldPw || !newPw) { msgEl.textContent = '请填写完整'; return; }
+  if (newPw.length < 6) { msgEl.textContent = '新密码至少 6 位'; return; }
+  if (newPw !== newPw2) { msgEl.textContent = '两次输入的新密码不一致'; return; }
+
+  const username = localStorage.getItem('alethic_admin_username') || '';
+  const res0 = await fetch(`__PREFIX__/api/auth/salt?student_id=${encodeURIComponent(username)}`);
+  if (!res0.ok) { msgEl.textContent = '获取盐失败，请重新登录后再试'; return; }
+  const { salt } = await res0.json();
+
+  const newSalt = randomSaltHex();
+  const res = await fetch('__PREFIX__/api/auth/change_password', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + getToken(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      old_client_hash: await clientHash(oldPw, salt),
+      new_salt: newSalt,
+      new_client_hash: await clientHash(newPw, newSalt)
+    })
+  });
+  if (res.status === 401) {
+    const detail = (await res.json().catch(() => ({}))).detail || '';
+    if (detail.includes('原密码')) { msgEl.textContent = '原密码错误'; return; }
+    clearToken();
+    showLogin();
+    return;
+  }
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))).detail || '';
+    msgEl.textContent = (typeof detail === 'string' && detail) || '修改失败，请稍后重试';
+    return;
+  }
+  msgEl.textContent = '密码修改成功 ✓';
+  document.getElementById('pw-changed-warn').classList.add('hidden');
+  document.getElementById('pw-old').value = '';
+  document.getElementById('pw-new').value = '';
+  document.getElementById('pw-new2').value = '';
+  if (forcedPwMode) enterMain(true); // 强制改密完成，放开管理功能
 }
 
 function selectedCid() {
@@ -240,7 +585,7 @@ function selectedCid() {
 }
 
 async function loadCampaigns() {
-  const res = await api('/api/campaigns');
+  const res = await api('__PREFIX__/api/campaigns');
   campaigns = await res.json();
   const sel = document.getElementById('campaign-select');
   const prev = sel.value;
@@ -259,14 +604,26 @@ async function loadCampaigns() {
 function updateMeta() {
   const c = campaigns.find(x => x.id === selectedCid());
   const meta = document.getElementById('campaign-meta');
-  if (c) meta.textContent = `批次状态：${c.status}；数据截至回收时间：${c.expires_at.slice(0, 10)}（30 天自动回收）`;
-  else meta.textContent = '暂无批次，请先新建。';
+  if (c) meta.textContent = `届次状态：${c.status}；数据截至回收时间：${c.expires_at.slice(0, 10)}（30 天自动回收）`;
+  else meta.textContent = '暂无届次，请先新建。';
 }
 
 function onCampaignChange() {
   updateMeta();
   refreshList();
   refreshSessions();
+  currentReviewSid = null;
+  document.getElementById('review-detail').classList.add('hidden');
+  refreshReviewSessions();
+  currentInterviewSid = null;
+  document.getElementById('interview-panel').classList.add('hidden');
+  refreshInterviewCandidates();
+}
+
+function regCompleteBadge(a) {
+  return a.registration_complete === 0
+    ? '<span class="badge voided">未完成</span>'
+    : '<span class="badge uploaded">完整</span>';
 }
 
 async function refreshList() {
@@ -274,19 +631,25 @@ async function refreshList() {
   const tbody = document.getElementById('list-body');
   document.getElementById('list-error').classList.add('hidden');
   if (!cid) {
-    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--muted)">请先创建并选择批次</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:var(--muted)">请先创建并选择届次</td></tr>';
     document.getElementById('count-label').textContent = '';
     return;
   }
   const q = encodeURIComponent(document.getElementById('search-input').value.trim());
   const intent = document.getElementById('intent-filter').value;
   const status = document.getElementById('status-filter').value;
+  const regTop = document.getElementById('reg-top-filter').checked;
   const params = new URLSearchParams();
   if (q) params.set('q', q);
   if (intent !== '') params.set('lab_intent', intent);
   if (status) params.set('status', status);
-  const res = await api(`/api/campaigns/${cid}/applications?${params}`);
-  const list = await res.json();
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/applications?${params}`);
+  let list = await res.json();
+  if (regTop) {
+    // 未完成（registration_complete=0）置顶；字段缺失按存量默认视为完整
+    list = [...list].sort((a, b) => (a.registration_complete === 0 ? 0 : 1) - (b.registration_complete === 0 ? 0 : 1));
+  }
+  currentApps = list;
   tbody.innerHTML = list.map(a => `
     <tr>
       <td>${esc(a.student_id)}</td>
@@ -298,10 +661,58 @@ async function refreshList() {
       <td>${a.domains.map(d => `<span class="field-chip">${DOMAIN_LABELS[d] || d}</span>`).join('')}</td>
       <td>${FOCUS_LABELS[a.focus_next_year] || a.focus_next_year}</td>
       <td style="max-width:220px">${esc(a.expectation)}</td>
-      <td>${STATUS_LABELS[a.status] || a.status}</td>
+      <td>${EXAM_MODE_LABELS[a.exam_mode] || esc(a.exam_mode) || '标准机试'}</td>
+      <td>
+        <select data-status="${a.status}" onchange="changeAppStatus('${a.student_id}', this)">
+          ${Object.entries(STATUS_LABELS).map(([v, t]) => `<option value="${v}"${v === a.status ? ' selected' : ''}>${t}</option>`).join('')}
+        </select>
+      </td>
+      <td>${regCompleteBadge(a)}</td>
       <td>${nowLabel(a.created_at)}</td>
     </tr>`).join('');
   document.getElementById('count-label').textContent = `共 ${list.length} 人`;
+}
+
+async function changeAppStatus(studentId, sel) {
+  const status = sel.value;
+  const cid = selectedCid();
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/applications/${encodeURIComponent(studentId)}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status })
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`;
+    alert(`状态更新失败（${studentId}）：${detail}`);
+    sel.value = sel.dataset.status;
+    return;
+  }
+  sel.dataset.status = status;
+  const app = currentApps.find(a => a.student_id === studentId);
+  if (app) app.status = status;
+}
+
+async function copyAdmittedQQ() {
+  const qqs = currentApps.filter(a => a.status === 'admitted' && a.qq).map(a => a.qq);
+  if (!qqs.length) {
+    alert('当前列表中没有已录取且填写了 QQ 的考生');
+    return;
+  }
+  const text = qqs.join('\n');
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+    ta.remove();
+  }
+  alert(ok ? `已复制 ${qqs.length} 位录取考生的 QQ` : '复制失败，请手动复制');
 }
 
 async function refreshSessions() {
@@ -310,7 +721,7 @@ async function refreshSessions() {
   document.getElementById('session-error').classList.add('hidden');
   document.getElementById('session-count').textContent = '';
   if (!cid) return;
-  const res = await api(`/api/campaigns/${cid}/exam/sessions`);
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/exam/sessions`);
   if (!res.ok) { document.getElementById('session-error').textContent = '加载失败'; document.getElementById('session-error').classList.remove('hidden'); return; }
   const search = (document.getElementById('session-search').value || '').trim();
   let list = await res.json();
@@ -325,17 +736,46 @@ async function refreshSessions() {
       <td>${(s.domain_tags || []).map(d => `<span class="field-chip">${DOMAIN_LABELS[d] || d}</span>`).join('')}</td>
       <td style="font-size:12px;color:var(--muted)">${esc(s.machine_id)}</td>
       <td>${nowLabel(s.opened_at)}</td>
-      <td>${s.status === 'draft'
+      <td>${(s.status === 'draft'
         ? `<button class="btn small danger" onclick="voidSession('${s.student_id}')">作废（授权重考）</button>`
-        : ''}</td>
+        : (s.status === 'uploaded'
+          ? (s.cleaned_file_path
+            ? `<a href="#" class="btn small" onclick="downloadSessionFile('${s.id}', 'cleaned');return false;">下载清洗件</a>`
+              + (s.attachment_file_path
+                ? ` <a href="#" class="btn small" onclick="downloadSessionFile('${s.id}', 'attachment');return false;">下载附件</a>`
+                : '')
+            : '<span class="badge draft" title="轨迹文件存于考场局域网接收机">局域网</span>')
+          : ''))
+        + (s.repo_url
+          ? ` <a href="${esc(s.repo_url)}" target="_blank" rel="noopener">仓库 ↗</a>`
+          : '')}</td>
     </tr>`).join('');
   document.getElementById('session-count').textContent = `共 ${list.length} 个会话`;
+}
+
+function downloadSessionFile(sid, kind) {
+  const cid = selectedCid();
+  if (!cid) return;
+  fetch(`__PREFIX__/api/campaigns/${cid}/sessions/${sid}/files/${kind}`, { headers: { 'Authorization': 'Bearer ' + getToken() } })
+    .then(res => {
+      if (!res.ok) throw new Error('下载失败');
+      return res.blob();
+    })
+    .then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = kind === 'attachment' ? `attachment_${sid}.zip` : `cleaned_${sid}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    })
+    .catch(e => { document.getElementById('session-error').textContent = e.message; document.getElementById('session-error').classList.remove('hidden'); });
 }
 
 async function voidSession(studentId) {
   const cid = selectedCid();
   if (!confirm(`确认作废 ${studentId} 的当前考试会话？作废后该生可重新开考。`)) return;
-  const res = await api(`/api/campaigns/${cid}/exam/void`, {
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/exam/void`, {
     method: 'POST',
     body: JSON.stringify({ student_id: studentId })
   });
@@ -345,6 +785,483 @@ async function voidSession(studentId) {
     return;
   }
   refreshSessions();
+}
+
+function showReviewError(msg) {
+  const errEl = document.getElementById('review-error');
+  errEl.textContent = msg;
+  errEl.classList.remove('hidden');
+}
+
+function isScored(s) {
+  return s.increment_score !== null && s.increment_score !== undefined;
+}
+
+function scoreBadge(s) {
+  if (!isScored(s)) return '<span class="badge draft">未评</span>';
+  return `<span class="badge uploaded">增量 ${esc(s.increment_score)} / 人类率 ${s.human_rate === null || s.human_rate === undefined ? '—' : esc(s.human_rate)}</span>`;
+}
+
+async function refreshReviewSessions() {
+  const cid = selectedCid();
+  const listEl = document.getElementById('review-list');
+  document.getElementById('review-error').classList.add('hidden');
+  if (!cid) {
+    listEl.innerHTML = '<p style="color:var(--muted)">请先创建并选择届次</p>';
+    return;
+  }
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/review/sessions`);
+  if (!res.ok) { showReviewError('评审列表加载失败'); return; }
+  reviewSessions = await res.json();
+  listEl.innerHTML = reviewSessions.map(s => `
+    <div class="review-item${s.session_id === currentReviewSid ? ' active' : ''}" onclick="openReviewSession('${s.session_id}')">
+      <div><strong>${esc(s.student_name || '')}</strong> <span style="color:var(--muted);font-size:12px">${esc(s.student_id)}</span></div>
+      <div style="font-size:12px;color:var(--muted)">${TRACK_LABELS[s.track] || s.track} · ${nowLabel(s.uploaded_at)}</div>
+      <div style="margin-top:4px">${scoreBadge(s)}${s.stored_lan ? ' <span class="badge draft" title="轨迹文件存于考场局域网接收机，请从接收机调取">局域网</span>' : ''}</div>
+    </div>`).join('') || '<p style="color:var(--muted)">暂无已交卷会话</p>';
+}
+
+function epochLabel(ms, withDate = true) {
+  if (typeof ms !== 'number') return '—';
+  const d = new Date(ms);
+  const p = n => String(n).padStart(2, '0');
+  const time = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return withDate ? `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${time}` : time;
+}
+
+function truncText(s, n = 300) {
+  s = String(s == null ? '' : s);
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function renderReviewEvent(e) {
+  switch (e.k) {
+    case 'user':
+    case 'assistant':
+      return `<div class="ev-${e.k}"><span class="ev-time">${epochLabel(e.time)}</span>${esc(e.text || '')}</div>`;
+    case 'tool': {
+      const err = e.err ? ` ／ERR: ${truncText(e.err, 200)}` : '';
+      const out = e.out_len !== undefined && e.out_len !== null ? `（输出 ${e.out_len} 字符）` : '';
+      return `<div class="ev-tool${e.err ? ' ev-tool-err' : ''}">🔧 ${esc(e.name || '')}${e.arg ? ' ' + esc(truncText(e.arg, 200)) : ''}${out}${err}</div>`;
+    }
+    case 'task':
+    case 'todo':
+    case 'compaction':
+      return `<div class="ev-minor">[${e.k}] ${esc(truncText(e.text || e.name || '', 120))}</div>`;
+    default:
+      return `<div class="ev-minor">[${esc(e.k)}] ${esc(truncText(e.text || e.name || '', 120))}</div>`;
+  }
+}
+
+function renderReviewTimeline(events) {
+  const counts = {};
+  let first = null, last = null;
+  events.forEach(e => {
+    counts[e.k] = (counts[e.k] || 0) + 1;
+    if (typeof e.time === 'number') {
+      if (first === null || e.time < first) first = e.time;
+      if (last === null || e.time > last) last = e.time;
+    }
+  });
+  document.getElementById('review-stats').innerHTML =
+    Object.entries(counts).map(([k, c]) => `${esc(k)} ${c}`).join(' · ')
+    + ` ｜ 首条 ${epochLabel(first)} － 末条 ${epochLabel(last)}`;
+  const main = [];
+  const sub = {};
+  events.forEach(e => {
+    const agent = e.agent || 'main';
+    if (agent === 'main') main.push(e);
+    else (sub[agent] = sub[agent] || []).push(e);
+  });
+  let html = main.map(renderReviewEvent).join('');
+  for (const [agent, evs] of Object.entries(sub)) {
+    html += `<details class="subagent"><summary>${esc(agent)}（${evs.length} 条）</summary><div class="subagent-body">${evs.map(renderReviewEvent).join('')}</div></details>`;
+  }
+  document.getElementById('review-timeline').innerHTML = html || '<p style="color:var(--muted)">无事件</p>';
+}
+
+function renderReviewQuestionMeta(items) {
+  const el = document.getElementById('review-question-meta');
+  if (!Array.isArray(items) || !items.length) {
+    el.innerHTML = '';
+    el.classList.add('hidden');
+    return;
+  }
+  el.classList.remove('hidden');
+  el.innerHTML = '<div class="iv-section-title">题目评审对照（question_meta）</div>' + items.map(q => `
+    <details class="subagent">
+      <summary>${esc(q.bank_id || '')} ${esc(q.title || '')}</summary>
+      <div class="subagent-body">
+        ${metaList('常见翻车模式（failure_modes）', q.failure_modes)}
+        ${metaLine('评审抓手（reviewer_notes）', q.reviewer_notes)}
+      </div>
+    </details>`).join('');
+}
+
+async function openReviewSession(sid) {
+  const cid = selectedCid();
+  if (!cid) return;
+  currentReviewSid = sid;
+  refreshReviewSessions();
+  document.getElementById('review-error').classList.add('hidden');
+  document.getElementById('score-msg').textContent = '';
+  const s = reviewSessions.find(x => x.session_id === sid) || {};
+  renderReviewQuestionMeta(s.question_meta);
+  const metaEl = document.getElementById('review-meta');
+  metaEl.innerHTML =
+    (s.repo_url ? `<a href="${esc(s.repo_url)}" target="_blank" rel="noopener">打开代码仓库 ↗</a>` : '<span style="color:var(--muted)">无仓库链接</span>')
+    + (s.stored_lan
+      ? ' <span class="badge draft">轨迹在考场局域网接收机</span>'
+      : ` <a href="#" class="btn small" onclick="downloadSessionFile('${sid}', 'cleaned');return false;">下载清洗件</a>`);
+  document.getElementById('score-increment').value = isScored(s) ? s.increment_score : '';
+  document.getElementById('score-human').value = (s.human_rate === null || s.human_rate === undefined) ? '' : s.human_rate;
+  document.getElementById('score-scorer').value = s.scorer || '';
+  document.getElementById('score-comment').value = s.comment || '';
+  document.getElementById('review-detail').classList.remove('hidden');
+  if (s.stored_lan) {
+    document.getElementById('review-stats').textContent = '';
+    document.getElementById('review-timeline').innerHTML =
+      '<p style="color:var(--muted)">该会话的轨迹文件存于考场局域网接收机（session_receiver），'
+      + '未上传云端——请用浏览器打开接收机首页查看 jsonl / 清洗报告并下载附件。</p>';
+    return;
+  }
+  document.getElementById('review-timeline').innerHTML = '<p style="color:var(--muted)">加载中…</p>';
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/sessions/${sid}/cleaned`);
+  if (!res.ok) {
+    document.getElementById('review-stats').textContent = '';
+    document.getElementById('review-timeline').innerHTML = '';
+    showReviewError('清洗件加载失败');
+    return;
+  }
+  const events = await res.json();
+  renderReviewTimeline(Array.isArray(events) ? events : []);
+}
+
+function readScoreNumber(id) {
+  const raw = document.getElementById(id).value.trim();
+  if (raw === '') return null;
+  const n = Number(raw);
+  if (Number.isNaN(n) || n < 0 || n > 100) return NaN;
+  return n;
+}
+
+async function saveScore() {
+  const cid = selectedCid();
+  const sid = currentReviewSid;
+  if (!cid || !sid) return;
+  const msgEl = document.getElementById('score-msg');
+  msgEl.textContent = '';
+  const increment = readScoreNumber('score-increment');
+  const human = readScoreNumber('score-human');
+  if (Number.isNaN(increment) || Number.isNaN(human)) {
+    alert('分数需为 0-100 之间的数字');
+    return;
+  }
+  const body = {
+    increment_score: increment,
+    human_rate: human,
+    comment: document.getElementById('score-comment').value.trim(),
+    scorer: document.getElementById('score-scorer').value.trim()
+  };
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/sessions/${sid}/score`, {
+    method: 'POST',
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    msgEl.textContent = '';
+    showReviewError('评分保存失败：' + ((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`));
+    return;
+  }
+  msgEl.textContent = '已保存 ✓';
+  await refreshReviewSessions();
+}
+
+async function generateShortlist() {
+  const cid = selectedCid();
+  if (!cid) return;
+  const msgEl = document.getElementById('shortlist-msg');
+  msgEl.textContent = '';
+  const n = Math.max(1, parseInt(document.getElementById('shortlist-n').value, 10) || 20);
+  if (!reviewSessions.length) await refreshReviewSessions();
+  const top = reviewSessions.filter(isScored)
+    .sort((a, b) => b.increment_score - a.increment_score)
+    .slice(0, n);
+  if (!top.length) { alert('暂无已评分会话，无法生成预选名单'); return; }
+  if (!confirm(`将把增量分前 ${top.length} 名考生（${top.map(s => s.student_name || s.student_id).join('、')}）的状态改为预选上榜（shortlisted），确认？`)) return;
+  let ok = 0, fail = 0;
+  for (const s of top) {
+    try {
+      const res = await api(`__PREFIX__/api/campaigns/${cid}/applications/${encodeURIComponent(s.student_id)}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'shortlisted' })
+      });
+      res.ok ? ok++ : fail++;
+    } catch (e) {
+      fail++;
+    }
+  }
+  msgEl.textContent = `成功 ${ok}，失败 ${fail}`;
+  alert(`预选名单完成：成功 ${ok}，失败 ${fail}`);
+  if (ok) refreshList();
+}
+
+let interviewCandidates = [];
+let currentInterviewSid = null;
+const IV_DIMS = ['m1', 'm2', 'm3', 'm4', 'm5'];
+
+function showInterviewError(msg) {
+  const errEl = document.getElementById('interview-error');
+  errEl.textContent = msg;
+  errEl.classList.remove('hidden');
+}
+
+function k3Field(k3, key) {
+  return k3 && k3[key] !== null && k3[key] !== undefined ? esc(k3[key]) : '—';
+}
+
+async function refreshInterviewCandidates() {
+  const cid = selectedCid();
+  const tbody = document.getElementById('interview-body');
+  document.getElementById('interview-error').classList.add('hidden');
+  document.getElementById('interview-count').textContent = '';
+  if (!cid) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted)">请先创建并选择届次</td></tr>';
+    return;
+  }
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/interview/candidates`);
+  if (!res.ok) { showInterviewError('面试名单加载失败'); return; }
+  interviewCandidates = await res.json();
+  tbody.innerHTML = interviewCandidates.map(c => `
+    <tr style="cursor:pointer" onclick="openInterviewPanel('${encodeURIComponent(c.student_id)}')">
+      <td>${esc(c.name)}</td>
+      <td>${esc(c.student_id)}</td>
+      <td>${STATUS_LABELS[c.status] || esc(c.status)}</td>
+      <td>${k3Field(c.k3, 'increment_score')}</td>
+      <td>${k3Field(c.k3, 'human_rate')}</td>
+      <td>${c.interview ? esc(c.interview.level || '—') : '<span style="color:var(--muted)">未面试</span>'}</td>
+      <td>${c.interview && c.interview.weighted_total !== null && c.interview.weighted_total !== undefined ? esc(c.interview.weighted_total) : '—'}</td>
+    </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted)">暂无候选考生</td></tr>';
+  document.getElementById('interview-count').textContent = `共 ${interviewCandidates.length} 人`;
+}
+
+function metaLine(label, val) {
+  return val ? `<div class="iv-meta"><strong>${label}：</strong>${esc(val)}</div>` : '';
+}
+
+function metaList(label, arr) {
+  // 题库 v5 导入的 meta 字段是换行分隔的字符串，测试造数则是数组——两者都支持
+  if (typeof arr === 'string') arr = arr.split(/\r?\n+/).map(s => s.trim()).filter(Boolean);
+  if (!Array.isArray(arr) || !arr.length) return '';
+  return `<div class="iv-meta"><strong>${label}：</strong><ul class="iv-list">${arr.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`;
+}
+
+function renderInterviewBrief(brief) {
+  const el = document.getElementById('interview-brief');
+  const k3 = brief.k3;
+  const k3Html = k3
+    ? `<div class="iv-k3"><strong>K3 机试评分报告</strong>：增量分 ${k3Field(k3, 'increment_score')} · 人类率 ${k3Field(k3, 'human_rate')} · 评分人 ${k3Field(k3, 'scorer')}${k3.comment ? `<div style="margin-top:4px">${esc(k3.comment)}</div>` : ''}</div>`
+    : '<div class="iv-k3"><strong>K3 机试评分报告</strong>：<span style="color:var(--muted)">暂无评分记录</span></div>';
+  const questions = Array.isArray(brief.questions) ? brief.questions : [];
+  const qHtml = questions.map(q => `
+    <details class="subagent">
+      <summary>${esc(q.bank_id || '')} ${esc(q.title || '')}（${DOMAIN_LABELS[q.domain] || esc(q.domain) || '—'} · ${esc(q.role) || '—'}）</summary>
+      <div class="subagent-body">
+        <div class="iv-body">${esc(truncText(q.body, 600))}</div>
+        ${metaLine('评审抓手（reviewer_notes）', q.reviewer_notes)}
+        ${metaList('优秀回答标志（pass_signals）', q.pass_signals)}
+        ${metaList('常见翻车模式（failure_modes）', q.failure_modes)}
+      </div>
+    </details>`).join('') || '<p class="hint">该考生无已下发机试题记录</p>';
+  const picks = Array.isArray(brief.safety_picks) ? brief.safety_picks : [];
+  const pick = brief.suggested_safety_pick;
+  const pickHtml = picks.map(p => {
+    const hit = !!pick && String(p.bank_id || '').includes(pick);
+    return `
+    <details class="subagent${hit ? ' iv-safety-pick' : ''}">
+      <summary>${esc(p.bank_id || '')} ${esc(p.title || '')}${hit ? ' ⭐ 建议抽题' : ''}</summary>
+      <div class="subagent-body">
+        <div class="iv-body">${esc(truncText(p.body, 400))}</div>
+        ${metaLine('出题人备注（reviewer_notes）', p.reviewer_notes)}
+      </div>
+    </details>`;
+  }).join('') || '<p class="hint">暂无 AI 安全抽题素材</p>';
+  el.innerHTML = [
+    `<div class="iv-meta"><strong>轨迹：</strong>${TRACK_LABELS[brief.track] || esc(brief.track) || '—'}　<strong>领域：</strong>${(brief.domains || []).map(d => DOMAIN_LABELS[d] || esc(d)).join('、') || '—'}　<strong>当前状态：</strong>${STATUS_LABELS[brief.status] || esc(brief.status) || '—'}</div>`,
+    k3Html,
+    `<div class="iv-section-title">机试题复盘（${questions.length} 题）</div>`,
+    qHtml,
+    `<div class="iv-section-title">AI 安全抽题（建议：${pick ? esc(pick) : '—'}）</div>`,
+    pickHtml,
+    `<p class="hint">${esc(brief.note || '')}</p>`
+  ].join('');
+}
+
+function fillInterviewForm(iv) {
+  IV_DIMS.forEach(m => {
+    document.getElementById('iv-' + m).value = iv && iv[m] !== null && iv[m] !== undefined ? iv[m] : '';
+    const ev = iv && iv.evidence ? iv.evidence[m] : '';
+    document.getElementById('iv-ev-' + m).value = ev || '';
+  });
+  const src = iv && iv.track_source === 'B' ? 'B' : 'A';
+  document.querySelector(`input[name="iv-track-source"][value="${src}"]`).checked = true;
+  document.getElementById('iv-s-flag').checked = !!(iv && iv.s_flag);
+  document.getElementById('iv-direct-channel').checked = !!(iv && iv.direct_channel);
+  document.getElementById('iv-inconsistency').value = (iv && iv.inconsistency) || '';
+  document.getElementById('iv-free-note').value = (iv && iv.free_note) || '';
+  const levelSel = document.getElementById('iv-level');
+  levelSel.value = (iv && iv.level && [...levelSel.options].some(o => o.value === iv.level)) ? iv.level : '';
+  document.getElementById('iv-interviewer').value = (iv && iv.interviewer) || '';
+  document.getElementById('iv-msg').textContent = '';
+}
+
+async function openInterviewPanel(encodedSid) {
+  const cid = selectedCid();
+  if (!cid) return;
+  const sid = decodeURIComponent(encodedSid);
+  currentInterviewSid = sid;
+  const cand = interviewCandidates.find(c => c.student_id === sid) || {};
+  document.getElementById('interview-panel').classList.remove('hidden');
+  document.getElementById('interview-panel-title').textContent = `面试 · ${cand.name || ''}（${sid}）`;
+  document.getElementById('interview-brief').innerHTML = '<p class="hint">备课卡加载中…</p>';
+  fillInterviewForm(cand.interview || null);
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/applications/${encodeURIComponent(sid)}/interview/brief`);
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`;
+    document.getElementById('interview-brief').innerHTML = `<p class="msg danger">备课卡加载失败：${esc(detail)}</p>`;
+    return;
+  }
+  renderInterviewBrief(await res.json());
+}
+
+function closeInterviewPanel() {
+  document.getElementById('interview-panel').classList.add('hidden');
+  currentInterviewSid = null;
+}
+
+async function saveInterview() {
+  const cid = selectedCid();
+  const sid = currentInterviewSid;
+  if (!cid || !sid) return;
+  const msgEl = document.getElementById('iv-msg');
+  msgEl.textContent = '';
+  const body = { evidence: {} };
+  for (const m of IV_DIMS) {
+    const raw = document.getElementById('iv-' + m).value.trim();
+    if (raw === '') { msgEl.textContent = `请填写 ${m.toUpperCase()} 分数（1~5）`; return; }
+    const n = Number(raw);
+    if (Number.isNaN(n) || n < 1 || n > 5) { msgEl.textContent = `${m.toUpperCase()} 分数需在 1~5 之间`; return; }
+    body[m] = n;
+    const ev = document.getElementById('iv-ev-' + m).value.trim();
+    if (ev) body.evidence[m] = ev;
+  }
+  body.track_source = document.querySelector('input[name="iv-track-source"]:checked').value;
+  body.s_flag = document.getElementById('iv-s-flag').checked ? 1 : 0;
+  body.direct_channel = document.getElementById('iv-direct-channel').checked ? 1 : 0;
+  body.inconsistency = document.getElementById('iv-inconsistency').value.trim();
+  body.free_note = document.getElementById('iv-free-note').value.trim();
+  const level = document.getElementById('iv-level').value;
+  if (level) body.level = level;
+  body.interviewer = document.getElementById('iv-interviewer').value.trim();
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/applications/${encodeURIComponent(sid)}/interview`, {
+    method: 'PUT',
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`;
+    msgEl.textContent = '保存失败：' + detail;
+    return;
+  }
+  const iv = await res.json();
+  const cand = interviewCandidates.find(c => c.student_id === sid);
+  if (cand) cand.interview = iv;
+  msgEl.textContent = `已保存 ✓ 等级：${iv.level || '—'}，加权总分：${iv.weighted_total !== null && iv.weighted_total !== undefined ? iv.weighted_total : '—'}`;
+  fillInterviewForm(iv);
+  refreshInterviewCandidates();
+}
+
+let accountList = [];
+
+function accountRoleBadge(role) {
+  return role === 'admin'
+    ? '<span class="badge uploaded">管理员</span>'
+    : '<span class="badge draft">考生</span>';
+}
+
+function accountPwBadge(v) {
+  return v ? '<span class="badge uploaded">已改</span>' : '<span class="badge draft">未改</span>';
+}
+
+function accountRegBadge(a) {
+  if (a.role === 'admin') return '<span style="color:var(--muted)">—</span>';
+  return (a.registration_complete === 0 || a.registration_complete === false)
+    ? '<span class="badge voided">未完成</span>'
+    : '<span class="badge uploaded">完整</span>';
+}
+
+async function refreshAccounts() {
+  const tbody = document.getElementById('account-body');
+  const errEl = document.getElementById('account-error');
+  errEl.classList.add('hidden');
+  document.getElementById('account-count').textContent = '';
+  const params = new URLSearchParams();
+  const role = document.getElementById('account-role-filter').value;
+  const q = document.getElementById('account-search').value.trim();
+  if (role) params.set('role', role);
+  if (q) params.set('q', q);
+  const res = await api(`__PREFIX__/api/admin/accounts?${params}`);
+  if (res.status === 401) { clearToken(); showLogin(); return; }
+  if (!res.ok) {
+    tbody.innerHTML = '';
+    errEl.textContent = '账号列表加载失败：' + ((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+    errEl.classList.remove('hidden');
+    return;
+  }
+  const data = await res.json();
+  accountList = Array.isArray(data.items) ? data.items : [];
+  tbody.innerHTML = accountList.map(a => `
+    <tr>
+      <td>${esc(a.student_id)}</td>
+      <td>${esc(a.name)}</td>
+      <td>${esc(a.nickname)}</td>
+      <td>${accountRoleBadge(a.role)}</td>
+      <td>${esc(a.dept || '')}</td>
+      <td>${a.enroll_year === null || a.enroll_year === undefined ? '—' : esc(a.enroll_year)}</td>
+      <td>${accountPwBadge(a.pw_changed)}</td>
+      <td>${accountRegBadge(a)}</td>
+      <td>
+        ${a.role === 'admin'
+          ? `<button class="btn small secondary" onclick="setAccountRole('${encodeURIComponent(a.student_id)}', 'applicant')">取消管理员</button>`
+          : `<button class="btn small secondary" onclick="setAccountRole('${encodeURIComponent(a.student_id)}', 'admin')">设为管理员</button>`}
+        <button class="btn small danger" onclick="resetAccountPassword('${encodeURIComponent(a.student_id)}')">重置密码</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;color:var(--muted)">暂无账号</td></tr>';
+  document.getElementById('account-count').textContent = `共 ${accountList.length} 个账号`;
+}
+
+async function setAccountRole(encodedSid, role) {
+  const sid = decodeURIComponent(encodedSid);
+  if (role === 'applicant' && !confirm(`确认取消 ${sid} 的管理员角色？`)) return;
+  const res = await api(`__PREFIX__/api/admin/accounts/${encodeURIComponent(sid)}/role`, {
+    method: 'POST',
+    body: JSON.stringify({ role })
+  });
+  if (!res.ok) {
+    alert(`角色变更失败（${sid}）：` + ((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`));
+    return;
+  }
+  refreshAccounts();
+}
+
+async function resetAccountPassword(encodedSid) {
+  const sid = decodeURIComponent(encodedSid);
+  if (!confirm(`确认重置 ${sid} 的密码？重置后密码将恢复为默认密码（即学号 ${sid}），请通知本人登录后尽快修改。`)) return;
+  const res = await api(`__PREFIX__/api/admin/accounts/${encodeURIComponent(sid)}/reset_password`, { method: 'POST' });
+  if (!res.ok) {
+    alert(`密码重置失败（${sid}）：` + ((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`));
+    return;
+  }
+  alert(`已重置 ${sid} 的密码为默认密码（学号）`);
+  refreshAccounts();
 }
 
 function toggleNewQuestion() {
@@ -359,7 +1276,7 @@ async function refreshQuestions() {
   if (domain) params.set('domain', domain);
   if (track) params.set('track', track);
   if (active !== '') params.set('active', active);
-  const res = await api(`/api/questions?${params}`);
+  const res = await api(`__PREFIX__/api/questions?${params}`);
   if (!res.ok) return;
   const list = await res.json();
   document.getElementById('question-body').innerHTML = list.map(q => `
@@ -378,14 +1295,14 @@ async function refreshQuestions() {
 }
 
 async function toggleQ(id, active) {
-  const res = await api(`/api/questions/${id}`, { method: 'PATCH', body: JSON.stringify({ active: !!active }) });
+  const res = await api(`__PREFIX__/api/questions/${id}`, { method: 'PATCH', body: JSON.stringify({ active: !!active }) });
   if (!res.ok) { alert('操作失败'); return; }
   refreshQuestions();
 }
 
 async function deleteQ(id) {
   if (!confirm('确认删除该题目？')) return;
-  const res = await api(`/api/questions/${id}`, { method: 'DELETE' });
+  const res = await api(`__PREFIX__/api/questions/${id}`, { method: 'DELETE' });
   if (!res.ok) { alert('删除失败'); return; }
   refreshQuestions();
 }
@@ -405,7 +1322,7 @@ async function createQuestion() {
     errEl.classList.remove('hidden');
     return;
   }
-  const res = await api('/api/questions', { method: 'POST', body: JSON.stringify(body) });
+  const res = await api('__PREFIX__/api/questions', { method: 'POST', body: JSON.stringify(body) });
   if (!res.ok) {
     errEl.textContent = (await res.json().catch(() => ({}))).detail || '保存失败';
     errEl.classList.remove('hidden');
@@ -438,6 +1355,9 @@ function bindTabs() {
       document.getElementById(btn.dataset.tab).classList.remove('hidden');
       if (btn.dataset.tab === 'tab-sessions') refreshSessions();
       if (btn.dataset.tab === 'tab-questions') refreshQuestions();
+      if (btn.dataset.tab === 'tab-review') refreshReviewSessions();
+      if (btn.dataset.tab === 'tab-interview') refreshInterviewCandidates();
+      if (btn.dataset.tab === 'tab-accounts') refreshAccounts();
     });
   });
 }
@@ -454,8 +1374,8 @@ async function createCampaign() {
     name: document.getElementById('new-cname').value.trim(),
     year: parseInt(document.getElementById('new-cyear').value, 10)
   };
-  if (!body.id || !body.name) { errEl.textContent = '请填写批次 ID 与名称'; errEl.classList.remove('hidden'); return; }
-  const res = await api('/api/campaigns', { method: 'POST', body: JSON.stringify(body) });
+  if (!body.id || !body.name) { errEl.textContent = '请填写届次 ID 与名称'; errEl.classList.remove('hidden'); return; }
+  const res = await api('__PREFIX__/api/campaigns', { method: 'POST', body: JSON.stringify(body) });
   if (!res.ok) {
     errEl.textContent = (await res.json().catch(() => ({}))).detail || '创建失败';
     errEl.classList.remove('hidden');
@@ -480,7 +1400,7 @@ function exportCsv() {
   const params = new URLSearchParams();
   if (intent !== '') params.set('lab_intent', intent);
   if (status) params.set('status', status);
-  fetch(`/api/campaigns/${cid}/applications/export.csv?${params}`, { headers: { 'Authorization': 'Bearer ' + getToken() } })
+  fetch(`__PREFIX__/api/campaigns/${cid}/applications/export.csv?${params}`, { headers: { 'Authorization': 'Bearer ' + getToken() } })
     .then(res => {
       if (!res.ok) throw new Error('导出失败');
       return res.blob();
@@ -497,8 +1417,18 @@ function exportCsv() {
 }
 
 document.getElementById('login-btn').addEventListener('click', login);
-document.getElementById('token-input').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
-document.getElementById('logout-btn').addEventListener('click', () => { clearToken(); showLogin(); });
+document.getElementById('password-input').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+document.getElementById('logout-btn').addEventListener('click', () => {
+  fetch('__PREFIX__/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + getToken() } })
+    .catch(() => {});
+  clearToken();
+  document.getElementById('pw-card').classList.add('hidden');
+  showLogin();
+});
+document.getElementById('pw-toggle-btn').addEventListener('click', () => {
+  document.getElementById('pw-card').classList.toggle('hidden');
+});
+document.getElementById('pw-save-btn').addEventListener('click', changeAdminPassword);
 document.getElementById('new-campaign-btn').addEventListener('click', toggleNewCampaign);
 document.getElementById('create-campaign-btn').addEventListener('click', createCampaign);
 document.getElementById('refresh-campaigns-btn').addEventListener('click', loadCampaigns);
@@ -507,13 +1437,33 @@ document.getElementById('refresh-sessions-btn').addEventListener('click', refres
 document.getElementById('session-search').addEventListener('input', refreshSessions);
 document.getElementById('new-question-btn').addEventListener('click', toggleNewQuestion);
 document.getElementById('create-question-btn').addEventListener('click', createQuestion);
+document.getElementById('copy-qq-btn').addEventListener('click', copyAdmittedQQ);
+document.getElementById('gen-shortlist-btn').addEventListener('click', generateShortlist);
+document.getElementById('save-score-btn').addEventListener('click', saveScore);
+document.getElementById('refresh-interview-btn').addEventListener('click', refreshInterviewCandidates);
+document.getElementById('interview-panel-close-btn').addEventListener('click', closeInterviewPanel);
+document.getElementById('save-interview-btn').addEventListener('click', saveInterview);
+document.getElementById('refresh-accounts-btn').addEventListener('click', refreshAccounts);
 
 fillSelects();
 bindTabs();
 
 if (getToken()) {
-  api('/api/admin/verify').then(res => res.ok ? (showMain(), loadCampaigns(), refreshSessions(), refreshQuestions()) : showLogin())
-    .catch(() => showLogin());
+  // 旧版 /api/admin/verify 已下线；改用 /api/auth/me 验真（该接口在强制改密门禁白名单内，
+  // 未改密的管理员会话也能正常返回，从而进入强制改密态而非被误登出）
+  fetch('__PREFIX__/api/auth/me', { headers: { 'Authorization': 'Bearer ' + getToken() } })
+    .then(res => {
+      if (!res.ok) throw new Error('invalid session');
+      return res.json();
+    })
+    .then(me => {
+      if (me.role !== 'admin') throw new Error('not admin');
+      enterMain(!!me.pw_changed);
+    })
+    .catch(() => {
+      clearToken();
+      showLogin();
+    });
 } else {
   showLogin();
 }

@@ -1,3 +1,12 @@
+import sys
+from pathlib import Path
+
+from app import db
+from conftest import applicant_headers
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
 def _app_payload(student_id="08266001", name="考拉一号", domains=None):
     return {
         "student_id": student_id,
@@ -47,10 +56,22 @@ def test_questions_require_admin(client):
 
 
 def test_enroll_no_application(client, cid):
+    student = "08269990"
+    res = client.post(f"/api/campaigns/{cid}/applications", json=_app_payload(student))
+    assert res.status_code == 200
+    headers = applicant_headers(client, cid, student)
+    with db.connection() as conn:
+        conn.execute("DELETE FROM application WHERE campaign_id = ? AND student_id = ?",
+                     (cid, student))
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
-                      json={"student_id": "08269999", "track": "track1"})
+                      json={"track": "track1"}, headers=headers)
     assert res.status_code == 404
     assert res.json()["detail"]["code"] == "no_application"
+
+
+def test_enroll_requires_login_401(client, cid):
+    res = client.post(f"/api/campaigns/{cid}/exam/enroll", json={"track": "track1"})
+    assert res.status_code == 401
 
 
 def test_enroll_track1_serves_questions(client, cid, admin_headers):
@@ -65,9 +86,10 @@ def test_enroll_track1_serves_questions(client, cid, admin_headers):
     res = client.post(f"/api/campaigns/{cid}/applications",
                       json=_app_payload("08266001", domains=["llm_arch", "ai_safety"]))
     assert res.status_code == 200
+    headers = applicant_headers(client, cid, "08266001")
 
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
-                      json={"student_id": "08266001", "track": "track1"})
+                      json={"track": "track1"}, headers=headers)
     assert res.status_code == 200
     data = res.json()
     assert data["track"] == "track1"
@@ -75,14 +97,14 @@ def test_enroll_track1_serves_questions(client, cid, admin_headers):
     assert data["session_token"]
     assert data["machine_id"]
     assert set(d["domain"] for d in data["questions"]) == {"llm_arch", "ai_safety"}
-    return data
 
 
 def test_enroll_track3_no_questions(client, cid):
     client.post(f"/api/campaigns/{cid}/applications",
                 json=_app_payload("08266003", domains=["memory"]))
+    headers = applicant_headers(client, cid, "08266003")
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
-                      json={"student_id": "08266003", "track": "track3"})
+                      json={"track": "track3"}, headers=headers)
     assert res.status_code == 200
     data = res.json()
     assert data["questions"] == []
@@ -96,33 +118,40 @@ def test_reroll(client, cid, admin_headers):
             client.post("/api/questions", json=_question_payload(dom, "track1", f"T1-{dom}-{j}"),
                         headers=admin_headers)
     client.post(f"/api/campaigns/{cid}/applications", json=_app_payload(student))
+    headers = applicant_headers(client, cid, student)
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
-                      json={"student_id": student, "track": "track1"})
+                      json={"track": "track1"}, headers=headers)
     assert res.status_code == 200
     sid = res.json()["session_id"]
     token = res.json()["session_token"]
 
     res = client.post(f"/api/campaigns/{cid}/exam/reroll",
                       json={"session_id": sid},
-                      headers={"X-Session-Token": "wrong"})
+                      headers={**headers, "X-Session-Token": "wrong"})
     assert res.status_code == 401
 
     res = client.post(f"/api/campaigns/{cid}/exam/reroll",
                       json={"session_id": sid},
-                      headers={"X-Session-Token": token})
+                      headers={**headers, "X-Session-Token": token})
     assert res.status_code == 200
     assert res.json()["rerolls_left"] == 1
 
     res = client.post(f"/api/campaigns/{cid}/exam/reroll",
                       json={"session_id": sid},
-                      headers={"X-Session-Token": token})
+                      headers={**headers, "X-Session-Token": token})
     assert res.status_code == 200
     assert res.json()["rerolls_left"] == 0
 
     res = client.post(f"/api/campaigns/{cid}/exam/reroll",
                       json={"session_id": sid},
-                      headers={"X-Session-Token": token})
+                      headers={**headers, "X-Session-Token": token})
     assert res.status_code == 409
+
+
+def test_health(client):
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
 
 
 def test_sessions_list_and_void(client, cid, admin_headers):
@@ -134,9 +163,10 @@ def test_sessions_list_and_void(client, cid, admin_headers):
                       json={"student_id": "08266001"}, headers=admin_headers)
     assert res.status_code == 200
 
+    headers = applicant_headers(client, cid, "08266001")
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
-                      json={"student_id": "08266001", "track": "track2"})
+                      json={"track": "track2"}, headers=headers)
     assert res.status_code == 200
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
-                      json={"student_id": "08266001", "track": "track2"})
+                      json={"track": "track2"}, headers=headers)
     assert res.status_code == 409
