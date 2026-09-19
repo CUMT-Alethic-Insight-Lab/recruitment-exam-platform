@@ -44,7 +44,7 @@ SHORTCUT_DESC = "Alethic Insight 社团招新机试平台"
 
 REQUIRED_KIT_FILES = ["exam_server.py", "cleaner.py", "config.json",
                       "启动考试系统.bat", "启动机试服务.bat"]
-OPTIONAL_KIT_FILES = ["README.md"]
+OPTIONAL_KIT_FILES = ["README.md", "session_receiver.py", "启动会话接收服务.bat"]
 
 AGENT_LABELS = {"kimi": "Kimi Code", "opencode": "opencode"}
 
