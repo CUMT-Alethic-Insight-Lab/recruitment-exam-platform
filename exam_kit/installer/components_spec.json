@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "updated": "2026-09-06",
+  "authority": "数值已按 R1 线 COMPONENTS.md（实测验证日期 2026-09-05）回填核对；SHA256 与 payload_cache/ 现有文件自算哈希一致。installer_app.py 只读本文件取参数，不硬编码任何版本号。",
+  "placeholders": {
+    "说明": "所有曾标 TODO 的字段已按 COMPONENTS.md 回填；COMPONENTS.md 后续更新（如 opencode 版本刷新）时直接覆盖本文件对应字段即可。",
+    "opencode_free_models": "免费模型为 OpenCode Zen 限时 $0 型号，出货前建议再刷 opencode.ai/docs/zen/ 确认（COMPONENTS.md §8）"
+  },
+  "tools_base": "%LOCALAPPDATA%\\Programs\\AlethicTools",
+  "components": {
+    "python": {
+      "label": "Python 3.12（完整版）",
+      "kind": "exe_installer",
+      "file": "python-3.12.10-amd64.exe",
+      "sha256": "67b5635e80ea51072b87941312d00ec8927c4db9ba18938f7ad2d27b328b95fb",
+      "silent_args": "/quiet InstallAllUsers=0 PrependPath=1 Include_test=0",
+      "ok_exit_codes": [
+        0,
+        3010
+      ],
+      "target_dir": "%LOCALAPPDATA%\\Programs\\Python\\Python312",
+      "verify_files": [
+        "%LOCALAPPDATA%\\Programs\\Python\\Python312\\python.exe"
+      ],
+      "verify_cmds": [
+        "py -3.12 --version",
+        "python --version"
+      ],
+      "version_regex": "3\\.12",
+      "path_append": [],
+      "notes": "Python 官方安装器自己写注册表/PATH（PrependPath=1），属常规系统软件行为，不受『考试系统不进注册表』承诺约束；安装器代理勿重复追加 Python 的 PATH（COMPONENTS.md §6）。参数经官方文档确认（docs.python.org/3.12/using/windows.html）。"
+    },
+    "node": {
+      "label": "Node.js（便携版）",
+      "kind": "zip_strip_root",
+      "file": "node-v24.20.0-win-x64.zip",
+      "sha256": "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba",
+      "target_dir": "%LOCALAPPDATA%\\Programs\\AlethicTools\\node",
+      "verify_files": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\node\\node.exe"
+      ],
+      "verify_cmds": [
+        "node --version"
+      ],
+      "version_regex": "",
+      "path_append": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\node"
+      ],
+      "notes": "官方 zip 根目录为 node-vX.Y.Z-win-x64/，解压时剥离根目录。"
+    },
+    "git": {
+      "label": "Git（PortableGit 便携版）",
+      "kind": "self_extractor",
+      "file": "PortableGit-2.55.0.5-64-bit.7z.exe",
+      "sha256": "5aa8a20f6e9abb2c755f0e73c91c687701a46b309ad84a0ca6509380fa4ae290",
+      "extract_args": [
+        "-y",
+        "-o{target}"
+      ],
+      "ok_exit_codes": [
+        0
+      ],
+      "target_dir": "%LOCALAPPDATA%\\Programs\\AlethicTools\\git",
+      "verify_files": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\git\\cmd\\git.exe"
+      ],
+      "verify_cmds": [
+        "git --version"
+      ],
+      "version_regex": "",
+      "path_append": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\git\\cmd"
+      ],
+      "notes": "目录名小写 git（COMPONENTS.md §3）。-o 与路径之间必须无空格（7-Zip SFX 语法），写成单 token \"-o{target}\"。PATH 只加 cmd\\ 子目录（官方推荐；R1 实测 bin\\git.exe 与 cmd\\git.exe 均可用）。"
+    },
+    "pwsh": {
+      "label": "PowerShell 7（便携版）",
+      "kind": "zip_flat",
+      "file": "PowerShell-7.6.5-win-x64.zip",
+      "sha256": "32eb8f6cdce08f86e987d625a2733e54ac3e289ae7e1621b14c0b5bcec2434ea",
+      "target_dir": "%LOCALAPPDATA%\\Programs\\AlethicTools\\pwsh",
+      "verify_files": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\pwsh\\pwsh.exe"
+      ],
+      "verify_cmds": [
+        "pwsh --version"
+      ],
+      "version_regex": "",
+      "path_append": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\pwsh"
+      ],
+      "post_install_check": [
+        "{target}\\pwsh.exe",
+        "--version"
+      ],
+      "notes": "官方 ZIP 661 个条目全部在 zip 根层（pwsh.exe 在根，无版本号包裹目录），故 zip_flat 原样解压。SHA256 与 GitHub release API 资产 digest 完全一致；解压到临时目录实测 pwsh.exe --version -> PowerShell 7.6.5。仅是便携目录，不写注册表。"
+    },
+    "kimi": {
+      "label": "Kimi Code CLI（离线预装包）",
+      "kind": "zip_flat",
+      "file": "kimi-code-0.40.1-offline.zip",
+      "sha256": "e5a88c0806f035c8119cd61aac8b113d20ef73c375852b377217d882fab83396",
+      "target_dir": "%LOCALAPPDATA%\\Programs\\AlethicTools\\kimi",
+      "verify_files": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\kimi\\node_modules\\.bin\\kimi.cmd"
+      ],
+      "verify_cmds": [
+        "kimi --version"
+      ],
+      "version_regex": "",
+      "path_append": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\kimi\\node_modules\\.bin"
+      ],
+      "needs_shim": false,
+      "post_install_check": [
+        "{target}\\node_modules\\.bin\\kimi.cmd",
+        "--version"
+      ],
+      "shim": {
+        "file": "kimi.cmd",
+        "template": "@echo off\r\nrem Kimi Code 启动 shim（由招新考试系统安装器生成）\r\n\"{node_exe}\" \"{entry}\" %*\r\n",
+        "node_exe": "{tools}\\node\\node.exe",
+        "node_exe_fallback": "node.exe",
+        "entry_rel": "node_modules\\@moonshot-ai\\kimi-code\\dist\\main.mjs"
+      },
+      "notes": "R1 方案 B（COMPONENTS.md §5）：离线包顶层只有 node_modules/，解压到 AlethicTools\\kimi\\ 后直接用包内自带的 node_modules\\.bin\\kimi.cmd（R1 已在干净 PATH 下实测 --version=0.40.1）；PATH 追加 .bin 目录；.cmd 运行时调 PATH 里的 node（由本清单 node 组件提供）。kimi.ps1 需 PowerShell，不可依赖。post_install_check 为装完后的真实运行自检，{target} 展开为本组件 target_dir，探测时自动附加各组件 path_append 目录进 PATH。"
+    },
+    "opencode": {
+      "label": "opencode（原生二进制）",
+      "kind": "zip_flat",
+      "file": "opencode-windows-x64.zip",
+      "sha256": "b32618aa3d1415f6e4f473aec248edef25759203fb707d7d968359d86d4a35ee",
+      "target_dir": "%LOCALAPPDATA%\\Programs\\AlethicTools\\opencode",
+      "verify_files": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\opencode\\opencode.exe"
+      ],
+      "verify_cmds": [
+        "opencode --version"
+      ],
+      "version_regex": "",
+      "path_append": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\opencode"
+      ],
+      "post_install_check": [
+        "{target}\\opencode.exe",
+        "--version"
+      ],
+      "notes": "zip 内为单个 opencode.exe（约 180MB），不依赖 Node.js（R1 在无 Node 的 PATH 下实测 --version=1.18.29）。仅当用户选择 opencode 时安装。注意：`opencode web` 默认随机端口，kit 的 opencode_web_cmd 如需固定端口应由 kit 侧传 --port（安装器不改 web 指令，保持 kit 默认）。"
+    }
+  },
+  "install_order": [
+    "pwsh",
+    "python",
+    "node",
+    "git",
+    "agent"
+  ],
+  "agent_component": {
+    "kimi": "kimi",
+    "opencode": "opencode"
+  }
+}

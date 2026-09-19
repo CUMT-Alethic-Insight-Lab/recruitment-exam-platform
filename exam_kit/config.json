@@ -1,0 +1,15 @@
+{
+  "cloud_base": "https://alethicinsight.com/recruitment",
+  "campaign_id": "2026autumn",
+  "exam_port": 8899,
+  "kimi_home": "",
+  "kimi_bin": "kimi",
+  "http_timeout": 10,
+  "agent": "kimi",
+  "kimi_web_cmd": "kimi web",
+  "opencode_web_cmd": "opencode web --port 8898",
+  "opencode_home": "",
+  "agent_workdir": "",
+  "upload_mode": "cloud",
+  "lan_receiver_base": ""
+}

@@ -1,0 +1,10 @@
+state.json
+pending_upload/*
+!pending_upload/.gitkeep
+runtime/
+dist/
+__pycache__/
+installer/payload_cache/
+installer/build/
+installer/dist/
+installer/payload/
