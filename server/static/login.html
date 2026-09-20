@@ -185,7 +185,7 @@ function showWelcome(data) {
 }
 
 function gotoAfterLogin(role) {
-  var dest = role === 'admin' ? '__PREFIX__/admin' : '__PREFIX__/account';
+  var dest = role === 'admin' ? '__ADMIN_PATH__' : '__PREFIX__/account';
   window.__loginDest = dest;
   // 主跳转：欢迎动效播完即走
   setTimeout(function () { location.href = dest; }, 1400);
@@ -294,7 +294,7 @@ async function resumeSession() {
     });
     if (!res.ok) throw new Error('invalid session');
     var me = await res.json();
-    location.replace(me.role === 'admin' ? '__PREFIX__/admin' : '__PREFIX__/account');
+    location.replace(me.role === 'admin' ? '__ADMIN_PATH__' : '__PREFIX__/account');
   } catch (err) {
     try {
       localStorage.removeItem(ADMIN_TOKEN_KEY);

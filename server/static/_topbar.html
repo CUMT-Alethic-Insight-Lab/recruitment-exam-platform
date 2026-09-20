@@ -1,6 +1,6 @@
 <!-- 招新站统一顶栏（由 app/main.py render_page 注入 __TOPBAR__ 占位）。
-     __PREFIX__ 在注入时一并替换。品牌标与官网同源（static/mark.svg）。 -->
-<header class="topbar" data-prefix="__PREFIX__">
+     __PREFIX__ 与 __ADMIN_PATH__ 在注入时一并替换。品牌标与官网同源（static/mark.svg）。 -->
+<header class="topbar" data-prefix="__PREFIX__" data-admin-path="__ADMIN_PATH__">
   <div class="topbar-inner">
     <a class="topbar-brand" href="https://alethicinsight.com/">
       <img src="__PREFIX__/static/mark.svg" alt="" width="32" height="32">
@@ -9,7 +9,7 @@
     <nav class="topbar-nav" aria-label="招新导航">
       <a href="https://alethicinsight.com/">官网</a>
       <a href="__PREFIX__/">招新</a>
-      <a href="__PREFIX__/admin">管理端</a>
+      <a href="__ADMIN_PATH__">管理端</a>
     </nav>
     <div class="topbar-right">
       <div class="topbar-auth" id="topbar-auth">

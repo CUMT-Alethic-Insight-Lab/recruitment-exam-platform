@@ -8,6 +8,7 @@
   var bar = document.querySelector('.topbar');
   if (!bar) return;
   var PREFIX = bar.dataset.prefix || '';
+  var ADMIN_PATH = bar.dataset.adminPath || (PREFIX + '/admin');
   var root = document.documentElement;
 
   /* ---------- 主题 ---------- */
@@ -99,7 +100,7 @@
     var center = document.createElement('a');
     center.className = 'topbar-btn';
     if (me.role === 'admin') {
-      center.href = PREFIX + '/admin';
+      center.href = ADMIN_PATH;
       center.textContent = '管理端';
     } else {
       center.href = PREFIX + '/account';

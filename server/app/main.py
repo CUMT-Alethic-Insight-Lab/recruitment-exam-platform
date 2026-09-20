@@ -11,11 +11,16 @@ from .routes import accounts, applications, auth as auth_routes, campaigns, exam
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 PREFIX_PLACEHOLDER = "__PREFIX__"
+ADMIN_PATH_PLACEHOLDER = "__ADMIN_PATH__"
 TOPBAR_PLACEHOLDER = "__TOPBAR__"
 
 
 def apply_public_prefix(html: str, prefix: str) -> str:
     return html.replace(PREFIX_PLACEHOLDER, prefix)
+
+
+def apply_admin_path(html: str, admin_path: str) -> str:
+    return html.replace(ADMIN_PATH_PLACEHOLDER, admin_path)
 
 
 def _static_version(name: str) -> str:
@@ -43,7 +48,9 @@ def render_topbar() -> str:
     path = STATIC_DIR / "_topbar.html"
     if not path.is_file():
         return ""
-    return _version_static_urls(apply_public_prefix(path.read_text(encoding="utf-8"), config.PUBLIC_PREFIX))
+    html = path.read_text(encoding="utf-8")
+    html = apply_public_prefix(html, config.PUBLIC_PREFIX)
+    return _version_static_urls(apply_admin_path(html, config.effective_admin_path()))
 
 
 def render_page(name: str) -> Response:
@@ -54,7 +61,7 @@ def render_page(name: str) -> Response:
     html = html.replace(TOPBAR_PLACEHOLDER, render_topbar())
     html = _version_static_urls(html)
     return Response(
-        content=apply_public_prefix(html, config.PUBLIC_PREFIX),
+        content=apply_admin_path(apply_public_prefix(html, config.PUBLIC_PREFIX), config.effective_admin_path()),
         media_type="text/html; charset=utf-8",
         # 页面 HTML 永不缓存：内联脚本随发版即变，旧 HTML 会复活已修掉的 bug
         headers={"Cache-Control": "no-store, must-revalidate"},
