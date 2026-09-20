@@ -16,8 +16,13 @@
     return root.dataset.theme === 'dark' ? 'dark' : 'light';
   }
   function paintThemeBtn() {
+    // 主站 track/thumb 结构：只改文案与 aria 态，不整颗替换按钮内容（会抹掉 track/thumb）
     var btn = document.getElementById('topbar-theme-btn');
-    if (btn) btn.textContent = currentTheme() === 'dark' ? '浅色' : '深色';
+    if (!btn) return;
+    var dark = currentTheme() === 'dark';
+    var label = document.getElementById('topbar-theme-label');
+    if (label) label.textContent = dark ? '浅色' : '深色';
+    btn.setAttribute('aria-pressed', String(!dark));
   }
   try {
     var saved = localStorage.getItem('theme');

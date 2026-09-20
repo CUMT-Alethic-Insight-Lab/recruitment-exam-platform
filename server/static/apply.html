@@ -7,23 +7,24 @@
 <link rel="stylesheet" href="__PREFIX__/static/css/style.css">
 <style>
 .step-indicator { display: flex; align-items: center; gap: 10px; margin: 4px 0 18px; }
-.step-ind { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); }
+.step-ind { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); font-family: var(--font-mono); letter-spacing: 0.06em; }
 .step-ind .num {
-  display: inline-block; width: 24px; height: 24px; line-height: 24px; text-align: center;
-  border-radius: 50%; background: var(--border); color: var(--muted); font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px;
+  border: 1px solid var(--line-strong); border-radius: 2px;
+  background: transparent; color: var(--muted); font-size: 12px; font-weight: 500;
 }
 .step-ind.active { color: var(--primary); font-weight: 600; }
-.step-ind.active .num { background: var(--primary); color: #fff; }
-.step-ind.done .num { background: var(--primary); color: #fff; }
+.step-ind.active .num { border-color: var(--primary); color: var(--primary); }
+.step-ind.done .num { border-color: var(--primary); color: var(--primary); }
 .step-arrow { color: var(--muted); font-size: 14px; }
 .step2-summary {
-  border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 2px; background: var(--panel);
   padding: 10px 12px; font-size: 14px; margin-bottom: 14px; color: var(--muted);
 }
 .step2-summary strong { color: var(--text); font-weight: 600; }
 .login-tip {
   border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c;
-  border-radius: 8px; padding: 10px 12px; font-size: 14px; margin: 12px 0 4px;
+  border-radius: 2px; padding: 10px 12px; font-size: 14px; margin: 12px 0 4px;
 }
 </style>
 </head>

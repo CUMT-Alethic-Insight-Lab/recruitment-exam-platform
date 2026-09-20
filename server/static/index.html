@@ -6,17 +6,37 @@
 <title>Alethic Insight · 招新</title>
 <link rel="stylesheet" href="__PREFIX__/static/css/style.css">
 <style>
-.hero { text-align: center; padding: 36px 16px 24px; }
-.hero .logo { font-size: 34px; font-weight: 700; letter-spacing: 1px; color: var(--primary); margin: 0 0 6px; }
+.hero { text-align: center; padding: 44px 16px 28px; }
+.hero .logo {
+  font-family: var(--font-display);
+  font-size: clamp(2.4rem, 6vw, 3.4rem);
+  font-weight: 300; letter-spacing: -0.022em; line-height: 1.02;
+  color: var(--text); margin: 0 0 12px;
+}
 .hero .tagline { color: var(--muted); font-size: 15px; margin: 0; }
 .hero-actions { margin-top: 10px; }
-.hero-actions .btn { margin: 16px 8px 0; }
-.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 6px; }
-.step { border: 1px solid var(--border); border-radius: 10px; padding: 14px 12px; background: var(--bg); }
-.step .num { display: inline-block; width: 26px; height: 26px; line-height: 26px; text-align: center; border-radius: 50%; background: var(--primary); color: #fff; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.hero-actions .btn { margin: 18px 8px 0; }
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0; margin-top: 6px; border-top: 1px solid var(--line-strong); }
+.step {
+  border-bottom: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+  padding: 16px 14px; background: transparent;
+  transition: background 160ms ease;
+}
+.step:hover { background: var(--surface-hover); }
+.step .num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border: 1px solid var(--line-strong); border-radius: 2px;
+  background: transparent; color: var(--primary);
+  font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+  margin-bottom: 10px;
+}
 .step h3 { font-size: 15px; margin: 0 0 4px; }
 .step p { font-size: 13px; color: var(--muted); margin: 0; }
-.footnote { font-size: 12.5px; color: var(--muted); margin: 16px 0 0; }
+.footnote {
+  font-family: var(--font-mono); font-size: 0.74rem; letter-spacing: 0.08em;
+  color: var(--muted); margin: 18px 0 0;
+}
 </style>
 </head>
 <body>

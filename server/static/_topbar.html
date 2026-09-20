@@ -1,5 +1,8 @@
-<!-- 招新站统一顶栏（由 app/main.py render_page 注入 __TOPBAR__ 占位）。
-     __PREFIX__ 与 __ADMIN_PATH__ 在注入时一并替换。品牌标与官网同源（static/mark.svg）。 -->
+<!-- 招新站统一顶栏（由 app/main.py render_page 注入顶栏占位符）。
+     结构对标官网主站 header：品牌标 mark.svg + Alethic Insight 字样、mono 导航、
+     theme-toggle track/thumb、直角描边操作按钮。
+     公网前缀与管理端路径在注入时一并替换；data-prefix / data-admin-path /
+     #topbar-auth / #topbar-theme-btn 为 topbar.js 的钩子，不可改名。 -->
 <header class="topbar" data-prefix="__PREFIX__" data-admin-path="__ADMIN_PATH__">
   <div class="topbar-inner">
     <a class="topbar-brand" href="https://alethicinsight.com/">
@@ -15,7 +18,10 @@
       <div class="topbar-auth" id="topbar-auth">
         <a class="topbar-btn primary" href="__PREFIX__/login">登录</a>
       </div>
-      <button class="topbar-theme-btn" id="topbar-theme-btn" type="button" aria-label="切换深色/浅色">深色</button>
+      <button class="theme-toggle" id="topbar-theme-btn" type="button" aria-label="切换深色/浅色">
+        <span class="theme-toggle-track" aria-hidden="true"><span class="theme-toggle-thumb"></span></span>
+        <span class="theme-toggle-label" id="topbar-theme-label">深色</span>
+      </button>
     </div>
   </div>
 </header>
