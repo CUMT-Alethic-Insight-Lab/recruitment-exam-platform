@@ -6,6 +6,8 @@ import pytest
 
 os.environ["SECRET_KEY"] = "test-secret-key"
 os.environ["ALE_THIC_DB_PATH"] = str(Path(__file__).parent / "test.db")
+# 验证码默认关闭：存量用例直发写接口不签名；test_m16 内部按用例局部开启
+os.environ["ALE_THIC_CAPTCHA_ENABLED"] = "0"
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

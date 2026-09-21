@@ -28,6 +28,11 @@ PUBLIC_PREFIX = os.environ.get("PUBLIC_PREFIX", "").rstrip("/")
 # 仅用于替换页面里的 __ADMIN_PATH__ 占位符；不设则回退 PUBLIC_PREFIX + '/admin'
 ADMIN_PUBLIC_PATH = os.environ.get("ADMIN_PUBLIC_PATH", "").rstrip("/")
 
+# 图形验证码（M16）：护注册与报名问卷提交两个匿名写接口。
+# 设 ALE_THIC_CAPTCHA_ENABLED=0 关闭（本地开发/测试），关闭时接口跳过校验。
+CAPTCHA_ENABLED = os.environ.get("ALE_THIC_CAPTCHA_ENABLED", "1").strip().lower() \
+    not in ("0", "false", "no", "off")
+
 
 def effective_admin_path() -> str:
     return ADMIN_PUBLIC_PATH or (PUBLIC_PREFIX + "/admin")

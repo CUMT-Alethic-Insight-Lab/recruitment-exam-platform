@@ -149,6 +149,13 @@ CREATE TABLE IF NOT EXISTS login_attempt (
     locked_until TEXT
 );
 
+CREATE TABLE IF NOT EXISTS captcha (
+    id          TEXT PRIMARY KEY,
+    code        TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    used        INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     actor       TEXT NOT NULL,

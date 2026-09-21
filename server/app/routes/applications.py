@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
-from .. import auth, db
+from .. import auth, captcha, db
 from ..auth import require_admin, require_applicant
 from ..constants import APPLICATION_STATUS, MAX_DOMAINS
 from ..schemas import (
@@ -66,6 +66,7 @@ def _row_to_out(row: sqlite3.Row) -> ApplicationOut:
 def submit_application(cid: str, body: ApplicationCreate):
     if len(body.domains) > MAX_DOMAINS:
         raise HTTPException(status_code=400, detail=f"领域最多选择 {MAX_DOMAINS} 个")
+    captcha.verify_or_http(body.captcha_id, body.captcha_text)
     with db.connection() as conn:
         get_campaign_or_404(conn, cid)
         existing = resolve_application(conn, cid, body.student_id)
@@ -124,6 +125,8 @@ def register(cid: str, body: RegistrationCreate):
     """流程式注册第一步：建号（未完成）或续填（幂等），完成后需提交完整问卷。"""
     with db.connection() as conn:
         get_campaign_or_404(conn, cid)
+    captcha.verify_or_http(body.captcha_id, body.captcha_text)
+    with db.connection() as conn:
         existing = resolve_application(conn, cid, body.student_id)
         now = now_iso()
         if existing is not None and existing["registration_complete"]:

@@ -40,6 +40,9 @@ class ApplicationCreate(BaseModel):
     expectation: str = Field(default="", max_length=1000)
     exam_mode: Literal["standard", "own_project", "free_creation"] = "standard"
     overwrite: bool = False
+    # 图形验证码（M16）：CAPTCHA_ENABLED 开启时必验
+    captcha_id: str = Field(default="", max_length=64)
+    captcha_text: str = Field(default="", max_length=8)
 
     @field_validator("student_id")
     @classmethod
@@ -74,6 +77,9 @@ class RegistrationCreate(BaseModel):
     student_id: str
     name: str = Field(min_length=1, max_length=32)
     gender: Literal["male", "female"]
+    # 图形验证码（M16）：CAPTCHA_ENABLED 开启时必验
+    captcha_id: str = Field(default="", max_length=64)
+    captcha_text: str = Field(default="", max_length=8)
 
     @field_validator("student_id")
     @classmethod

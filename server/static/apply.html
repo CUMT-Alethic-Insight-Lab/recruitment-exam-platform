@@ -26,6 +26,14 @@
   border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c;
   border-radius: 2px; padding: 10px 12px; font-size: 14px; margin: 12px 0 4px;
 }
+/* 图形验证码（M16）：mono 输入框 + 点击刷新的直角图块 */
+.captcha-row { display: flex; gap: 8px; align-items: stretch; }
+.captcha-row input { flex: 1; min-width: 0; font-family: var(--font-mono); letter-spacing: 0.3em; }
+.captcha-img {
+  width: 128px; height: 44px; flex-shrink: 0;
+  border: 1px solid var(--line-strong); border-radius: 2px;
+  background: var(--input-bg); cursor: pointer; display: block;
+}
 </style>
 </head>
 <body>
@@ -55,6 +63,12 @@ __TOPBAR__
       <input type="text" id="reg-student-id" name="student_id" placeholder="8 位数字，以 0826 开头" required>
       <p class="hint" id="reg-student-id-hint"></p>
       <p class="hint">提交后将自动创建考生账号：<strong>账号 = 学号，初始密码 = 学号</strong>，请下一步完成后尽快在个人中心修改密码。</p>
+
+      <label class="field-label" for="captcha-text-1">验证码 <span style="color:var(--danger)">*</span></label>
+      <div class="captcha-row">
+        <input type="text" id="captcha-text-1" maxlength="4" placeholder="不区分大小写" autocomplete="off" autocapitalize="none">
+        <img id="captcha-img-1" class="captcha-img" alt="图形验证码，看不清请点击刷新" title="点击刷新">
+      </div>
 
       <button type="submit" class="btn block" id="register-btn">下一步</button>
       <p class="error hidden" id="step1-error"></p>
@@ -97,6 +111,12 @@ __TOPBAR__
 
       <label class="field-label" for="expectation">期望收获</label>
       <textarea id="expectation" name="expectation" rows="4" placeholder="选填"></textarea>
+
+      <label class="field-label" for="captcha-text-2">验证码 <span style="color:var(--danger)">*</span></label>
+      <div class="captcha-row">
+        <input type="text" id="captcha-text-2" maxlength="4" placeholder="不区分大小写" autocomplete="off" autocapitalize="none">
+        <img id="captcha-img-2" class="captcha-img" alt="图形验证码，看不清请点击刷新" title="点击刷新">
+      </div>
 
       <button type="submit" class="btn" id="complete-btn">提交报名</button>
       <p class="error hidden" id="step2-error"></p>
@@ -196,6 +216,28 @@ function clearError(elId) {
   document.getElementById(elId).classList.add('hidden');
 }
 
+// 图形验证码（M16）：拉取 {id, image}；一次一码，提交失败（含验证码被消耗）后必须换新图
+async function loadCaptcha(n) {
+  const img = document.getElementById('captcha-img-' + n);
+  try {
+    const res = await fetch('__PREFIX__/api/captcha');
+    if (!res.ok) return;
+    const data = await res.json();
+    img.dataset.cid = data.id;
+    img.src = data.image;
+  } catch (e) { /* 拉取失败保留旧图；提交时后端会拒绝并再次刷新 */ }
+}
+function resetCaptcha(n) {
+  document.getElementById('captcha-text-' + n).value = '';
+  loadCaptcha(n);
+}
+function captchaPayload(n) {
+  return {
+    captcha_id: document.getElementById('captcha-img-' + n).dataset.cid || '',
+    captcha_text: document.getElementById('captcha-text-' + n).value.trim()
+  };
+}
+
 function scrollToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -225,6 +267,8 @@ async function registerStep1() {
     showError('step1-error', '请填写姓名、性别与学号。');
     return;
   }
+  const cap = captchaPayload(1);
+  if (!cap.captcha_text) { showError('step1-error', '请输入验证码。'); return; }
   const btn = document.getElementById('register-btn');
   btn.disabled = true;
   btn.textContent = '提交中…';
@@ -232,7 +276,7 @@ async function registerStep1() {
     const res = await fetch(`__PREFIX__/api/campaigns/${cid}/applications/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ student_id: studentId, name, gender })
+      body: JSON.stringify({ student_id: studentId, name, gender, ...cap })
     });
     if (res.status === 409) {
       const body = await res.json().catch(() => ({}));
@@ -257,6 +301,7 @@ async function registerStep1() {
   } finally {
     btn.disabled = false;
     btn.textContent = '下一步';
+    resetCaptcha(1); // 验证码一次一码：无论成败，旧码可能已被消耗，统一换新
   }
 }
 
@@ -344,7 +389,8 @@ async function submitComplete() {
     focus_next_year: document.querySelector('input[name=focus_next_year]:checked')?.value || '',
     exam_mode: document.querySelector('input[name=exam_mode]:checked')?.value || 'standard',
     expectation: document.getElementById('expectation').value.trim(),
-    overwrite: true
+    overwrite: true,
+    ...captchaPayload(2)
   };
   try {
     const res = await fetch(`__PREFIX__/api/campaigns/${cid}/applications`, {
@@ -369,6 +415,7 @@ async function submitComplete() {
   } finally {
     btn.disabled = false;
     btn.textContent = '提交报名';
+    resetCaptcha(2); // 验证码一次一码：无论成败，统一换新
   }
 }
 
@@ -405,6 +452,12 @@ document.querySelectorAll('#exam-mode-row input[name=exam_mode]').forEach(radio 
 
 renderDomains();
 renderExamModeHint();
+
+// 验证码初始化与点击刷新（一次一码：每次点击都换新码作废旧码）
+[1, 2].forEach(n => {
+  loadCaptcha(n);
+  document.getElementById('captcha-img-' + n).addEventListener('click', () => resetCaptcha(n));
+});
 
 // 初始化：本地已有会话时用 auth/me 判断注册完成度——未完成直接落到第二步并预填；已完成则落到第二步做覆盖更新
 (async function init() {

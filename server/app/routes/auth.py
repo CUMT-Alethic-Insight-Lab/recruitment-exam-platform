@@ -1,3 +1,4 @@
+import base64
 import binascii
 import re
 from pathlib import Path
@@ -5,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 
-from .. import auth, config, db
+from .. import auth, captcha, config, db
 from ..auth import require_applicant
 from ..schemas import ApplicantMeOut
 
@@ -117,6 +118,22 @@ def _detect_image_ext(data: bytes) -> str | None:
 
 
 # ---------- 统一登录（account 表） ----------
+
+
+@router.get("/api/captcha")
+def issue_captcha(request: Request):
+    """签发图形验证码（M16）：JSON {id, image}，image 为 PNG data URI。
+
+    开关关闭时照常签发（前端展示不变），仅后端校验被跳过。按 IP 限流。
+    """
+    ip = request.client.host if request.client else "unknown"
+    with db.connection() as conn:
+        captcha.check_issue_rate(conn, ip)
+    captcha_id, png = captcha.new_captcha()
+    return {
+        "id": captcha_id,
+        "image": "data:image/png;base64," + base64.b64encode(png).decode("ascii"),
+    }
 
 
 @router.get("/api/auth/salt")
