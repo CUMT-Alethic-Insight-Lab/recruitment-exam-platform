@@ -739,16 +739,17 @@ async function refreshSessions() {
       <td>${(s.domain_tags || []).map(d => `<span class="field-chip">${DOMAIN_LABELS[d] || d}</span>`).join('')}</td>
       <td style="font-size:12px;color:var(--muted)">${esc(s.machine_id)}</td>
       <td>${nowLabel(s.opened_at)}</td>
-      <td>${(s.status === 'draft'
-        ? `<button class="btn small danger" onclick="voidSession('${s.student_id}')">作废（授权重考）</button>`
-        : (s.status === 'uploaded'
+      <td>${((s.status === 'draft' || s.status === 'uploaded')
+          ? `<button class="btn small danger" onclick="voidSession('${s.student_id}')">作废（授权重考）</button> `
+          : '')
+        + (s.status === 'uploaded'
           ? (s.cleaned_file_path
             ? `<a href="#" class="btn small" onclick="downloadSessionFile('${s.id}', 'cleaned');return false;">下载清洗件</a>`
               + (s.attachment_file_path
                 ? ` <a href="#" class="btn small" onclick="downloadSessionFile('${s.id}', 'attachment');return false;">下载附件</a>`
                 : '')
             : '<span class="badge draft" title="轨迹文件存于考场局域网接收机">局域网</span>')
-          : ''))
+          : '')
         + (s.repo_url
           ? ` <a href="${esc(s.repo_url)}" target="_blank" rel="noopener">仓库 ↗</a>`
           : '')}</td>
@@ -777,7 +778,7 @@ function downloadSessionFile(sid, kind) {
 
 async function voidSession(studentId) {
   const cid = selectedCid();
-  if (!confirm(`确认作废 ${studentId} 的当前考试会话？作废后该生可重新开考。`)) return;
+  if (!confirm(`确认作废 ${studentId} 的当前考试会话？作废后该生可重新开考，被作废的会话（含已交卷）不再参与评审。`)) return;
   const res = await api(`__PREFIX__/api/campaigns/${cid}/exam/void`, {
     method: 'POST',
     body: JSON.stringify({ student_id: studentId })

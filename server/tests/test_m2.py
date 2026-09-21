@@ -99,16 +99,15 @@ def test_enroll_track1_serves_questions(client, cid, admin_headers):
     assert set(d["domain"] for d in data["questions"]) == {"llm_arch", "ai_safety"}
 
 
-def test_enroll_track3_no_questions(client, cid):
+def test_enroll_track3_without_domain_400(client, cid):
+    # M12：track3 不再随机发题——无 question_ids 且未给 domain 一律 400
     client.post(f"/api/campaigns/{cid}/applications",
                 json=_app_payload("08266003", domains=["memory"]))
     headers = applicant_headers(client, cid, "08266003")
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
                       json={"track": "track3"}, headers=headers)
-    assert res.status_code == 200
-    data = res.json()
-    assert data["questions"] == []
-    assert data["track3_guide_text"] != ""
+    assert res.status_code == 400
+    assert "请先选择领域" in str(res.json()["detail"])
 
 
 def test_reroll(client, cid, admin_headers):
@@ -170,3 +169,46 @@ def test_sessions_list_and_void(client, cid, admin_headers):
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
                       json={"track": "track2"}, headers=headers)
     assert res.status_code == 409
+
+
+def test_void_uploaded_allows_retake(client, cid, admin_headers):
+    sid = "08266002"
+    res = client.post(f"/api/campaigns/{cid}/applications",
+                      json=_app_payload(sid, name="重考二号"))
+    assert res.status_code == 200
+    headers = applicant_headers(client, cid, sid)
+    res = client.post(f"/api/campaigns/{cid}/exam/enroll",
+                      json={"track": "track1"}, headers=headers)
+    assert res.status_code == 200
+    session_id, token = res.json()["session_id"], res.json()["session_token"]
+
+    res = client.post(
+        f"/api/campaigns/{cid}/sessions",
+        data={"session_id": session_id},
+        files={"cleaned": ("cleaned.jsonl",
+                           b'{"event": "kimi_code_session", "turns": [1]}\n',
+                           "application/octet-stream")},
+        headers={"X-Session-Token": token},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "uploaded"
+
+    res = client.post(f"/api/campaigns/{cid}/exam/enroll",
+                      json={"track": "track1"}, headers=headers)
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "already_uploaded"
+
+    res = client.post(f"/api/campaigns/{cid}/exam/void",
+                      json={"student_id": sid}, headers=admin_headers)
+    assert res.status_code == 200
+    assert res.json()["status"] == "voided"
+
+    res = client.post(f"/api/campaigns/{cid}/exam/enroll",
+                      json={"track": "track1"}, headers=headers)
+    assert res.status_code == 200
+
+
+def test_void_without_session_404(client, cid, admin_headers):
+    res = client.post(f"/api/campaigns/{cid}/exam/void",
+                      json={"student_id": "08269999"}, headers=admin_headers)
+    assert res.status_code == 404

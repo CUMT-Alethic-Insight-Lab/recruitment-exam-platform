@@ -21,6 +21,7 @@ TRACK_KEYS = [t["key"] for t in EXAM_TRACKS]
 class EnrollBody(BaseModel):
     track: str
     question_ids: list[str] | None = None
+    domain: str | None = None
     student_id: str | None = None
 
 
@@ -176,7 +177,7 @@ def enroll(cid: str, body: EnrollBody,
             raise HTTPException(
                 status_code=409,
                 detail={"code": "already_uploaded",
-                        "message": "该学号已交卷，请勿重复开考"},
+                        "message": "该学号已交卷，如需重考请由监考作废原会话后再开考"},
             )
         cfg = exam_config_for(campaign)
         domains = json.loads(app["domains"])
@@ -184,11 +185,22 @@ def enroll(cid: str, body: EnrollBody,
             qrows = pick_selected_questions(conn, body.question_ids)
             if body.track == "track3":
                 check_track3_domains(qrows, domains)
+            session_domains = domains
+        elif body.track == "track3":
+            # M12 自由创作：track3 必须二选一——question_ids 选题（上面的分支）
+            # 或 domain 自由发挥（不发题，只记领域）；不再随机发 track3 题。
+            domain = (body.domain or "").strip()
+            if not domain:
+                raise HTTPException(status_code=400, detail="请先选择领域")
+            if domain not in domains:
+                raise HTTPException(status_code=400, detail="只能选择自己报名的领域")
+            qrows = []
+            session_domains = [domain]
         else:
             per_domain = (cfg["track1_per_domain"] if body.track == "track1"
                           else cfg["track2_per_domain"])
-            qrows = ([] if body.track == "track3"
-                     else pick_questions(conn, domains, body.track, per_domain))
+            qrows = pick_questions(conn, domains, body.track, per_domain)
+            session_domains = domains
         sid = uuid.uuid4().hex[:16]
         token = secrets.token_urlsafe(32)
         machine_id = uuid.uuid4().hex[:16]
@@ -198,7 +210,7 @@ def enroll(cid: str, body: EnrollBody,
             " machine_id, track, domain_tags, questions_served, status, opened_at)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)",
             (sid, cid, student_id, token, machine_id, body.track,
-             json.dumps(domains, ensure_ascii=False),
+             json.dumps(session_domains, ensure_ascii=False),
              json.dumps(questions_to_dict(qrows), ensure_ascii=False), now),
         )
         row = get_session_or_404(conn, sid)
@@ -243,18 +255,18 @@ def reroll(cid: str, body: dict, x_session_token: str | None = Header(default=No
 def void_sessions(cid: str, body: ExamVoid, _: None = Depends(require_admin)):
     with db.connection() as conn:
         get_campaign_or_404(conn, cid)
-        conn.execute(
+        cur = conn.execute(
             "UPDATE exam_session SET status = 'voided'"
-            " WHERE campaign_id = ? AND student_id = ? AND status = 'draft'",
+            " WHERE campaign_id = ? AND student_id = ? AND status IN ('draft', 'uploaded')",
             (cid, body.student_id),
         )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="该学号没有可作废的考试会话")
         row = conn.execute(
             "SELECT * FROM exam_session WHERE campaign_id = ? AND student_id = ?"
             " AND status = 'voided' ORDER BY opened_at DESC LIMIT 1",
             (cid, body.student_id),
         ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="该学号没有可作废的考试会话")
         return _row_to_out(row)
 
 
