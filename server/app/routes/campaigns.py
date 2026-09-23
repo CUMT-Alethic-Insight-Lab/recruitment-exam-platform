@@ -30,6 +30,23 @@ def get_campaign_or_404(conn: sqlite3.Connection, cid: str) -> sqlite3.Row:
     return row
 
 
+def campaign_apply_closed(row: sqlite3.Row) -> bool:
+    """exam_config.apply_closed=True：报名通道临时关闭（机试开考、评审不受影响）。"""
+    try:
+        cfg = json.loads(row["exam_config"] or "{}")
+    except (TypeError, ValueError):
+        return False
+    return bool(cfg.get("apply_closed"))
+
+
+def ensure_apply_open(row: sqlite3.Row) -> None:
+    """报名写入门禁：批次收口或报名临时关闭时拒绝。"""
+    if row["status"] != "open":
+        raise HTTPException(status_code=403, detail="该批次已收口，报名通道已关闭")
+    if campaign_apply_closed(row):
+        raise HTTPException(status_code=403, detail="报名通道已暂时关闭，恢复时间请关注官方 QQ 群公告")
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

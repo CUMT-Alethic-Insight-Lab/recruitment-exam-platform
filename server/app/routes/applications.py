@@ -19,7 +19,7 @@ from ..schemas import (
     focus_label,
     gender_label,
 )
-from .campaigns import get_campaign_or_404, now_iso
+from .campaigns import ensure_apply_open, get_campaign_or_404, now_iso
 
 router = APIRouter(prefix="/api/campaigns", tags=["applications"])
 
@@ -68,7 +68,8 @@ def submit_application(cid: str, body: ApplicationCreate):
         raise HTTPException(status_code=400, detail=f"领域最多选择 {MAX_DOMAINS} 个")
     captcha.verify_or_http(body.captcha_id, body.captcha_text)
     with db.connection() as conn:
-        get_campaign_or_404(conn, cid)
+        campaign = get_campaign_or_404(conn, cid)
+        ensure_apply_open(campaign)
         existing = resolve_application(conn, cid, body.student_id)
         now = now_iso()
         params = {
@@ -124,7 +125,8 @@ def submit_application(cid: str, body: ApplicationCreate):
 def register(cid: str, body: RegistrationCreate):
     """流程式注册第一步：建号（未完成）或续填（幂等），完成后需提交完整问卷。"""
     with db.connection() as conn:
-        get_campaign_or_404(conn, cid)
+        campaign = get_campaign_or_404(conn, cid)
+        ensure_apply_open(campaign)
     captcha.verify_or_http(body.captcha_id, body.captcha_text)
     with db.connection() as conn:
         existing = resolve_application(conn, cid, body.student_id)

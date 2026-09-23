@@ -108,10 +108,12 @@ app = FastAPI(title="Alethic Insight 招新平台", version="0.1.0", lifespan=li
 @app.get("/api/campaigns/latest-open")
 def latest_open_campaign():
     with db.connection() as conn:
-        row = conn.execute(
-            "SELECT id, name FROM campaign WHERE status = 'open'"
-            " ORDER BY created_at DESC, id DESC LIMIT 1"
-        ).fetchone()
+        rows = conn.execute(
+            "SELECT id, name, exam_config FROM campaign WHERE status = 'open'"
+            " ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+    # 报名临时关闭（apply_closed）的批次对外隐藏入口，但批次本身仍是 open
+    row = next((r for r in rows if not campaigns.campaign_apply_closed(r)), None)
     if row is None:
         raise HTTPException(status_code=404, detail="no open campaign")
     return {"id": row["id"], "title": row["name"]}
