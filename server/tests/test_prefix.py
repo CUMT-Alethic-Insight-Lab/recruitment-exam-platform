@@ -28,7 +28,7 @@ def test_home_is_fullscreen_deck_with_entry_slide(client):
     assert 'id="apply-btn"' in res.text and 'id="apply-hint"' in res.text
     assert 'href="/login">立即报名 / 登录</a>' in res.text  # 占位符已替换
     assert "/api/campaigns/latest-open" in res.text         # 报名按钮动态指向逻辑保留
-    assert "wheelLock" in res.text                          # 滚轮翻页
+    assert "ArrowRight" in res.text and "function go(" in res.text  # 键盘/点击翻页（终版无滚轮）
     assert 'data-prefix' not in res.text                    # 不注入顶栏
     assert PREFIX_PLACEHOLDER not in res.text and ADMIN_PATH_PLACEHOLDER not in res.text
 
