@@ -14,7 +14,7 @@ from app import db  # noqa: E402
 MD_PATH = Path(__file__).resolve().parent.parent / "data" / "question_bank_v5.md"
 
 EXPECTED_DOMAIN_COUNTS = {
-    "llm_arch": 3,
+    "llm_arch": 5,
     "cv_arch": 3,
     "vlm_align": 3,
     "rl": 5,
@@ -24,7 +24,7 @@ EXPECTED_DOMAIN_COUNTS = {
     "ai_safety": 3,
 }
 EXPECTED_BANK_IDS = {
-    "L1", "L2", "L3", "C1", "C2", "C3",
+    "L1", "L2", "L3", "L4", "L5", "C1", "C2", "C3",
     "V1", "V2", "V3",
     "R1", "R2", "R3", "R5", "R4",
     "A1", "A2", "A3", "A4",
@@ -53,20 +53,20 @@ def _by_id(questions):
 
 def test_parse_total_and_domain_counts(parsed):
     questions, report = parse_bank(MD_PATH)
-    assert report["total"] == 28
+    assert report["total"] == 30
     assert {q["bank_id"] for q in questions} == EXPECTED_BANK_IDS
     counts: dict[str, int] = {}
     for q in questions:
         counts[q["domain"]] = counts.get(q["domain"], 0) + 1
     assert counts == EXPECTED_DOMAIN_COUNTS
-    # 领域/track/active 分布（I4 加试改口径后默认下发，active=24/4）
+    # 领域/track/active 分布（I4 加试默认下发；L4/L5 开放题入 track3，active=26/4）
     tracks: dict[str, int] = {}
     active = {1: 0, 0: 0}
     for q in questions:
         tracks[q["track"]] = tracks.get(q["track"], 0) + 1
         active[q["active"]] += 1
-    assert tracks == {"track1": 19, "track2": 7, "track3": 2}
-    assert active == {1: 24, 0: 4}
+    assert tracks == {"track1": 19, "track2": 7, "track3": 4}
+    assert active == {1: 26, 0: 4}
     assert report["anomalies"] == []
 
 
@@ -104,6 +104,7 @@ def test_track_role_active_mapping(parsed):
     # 常规机试题 active=1
     for qid, role, track in [
         ("L1", "正选", "track1"), ("L2", "备选", "track1"), ("L3", "开放", "track3"),
+        ("L4", "开放", "track3"), ("L5", "开放", "track3"),
         ("C3", "实操", "track2"), ("R4", "实操", "track2"), ("A3", "实操", "track2"),
         ("A4", "实操", "track2"), ("I3", "实操", "track2"), ("M3", "实操", "track2"),
         ("V3", "开放", "track3"), ("I1", "正选", "track1"), ("M2", "备选", "track1"),
@@ -139,7 +140,7 @@ def test_upsert_idempotent(parsed):
 
     with db.connection() as conn:
         first = upsert_all(conn, questions)
-    assert first == {"inserted": 28, "updated": 0}
+    assert first == {"inserted": 30, "updated": 0}
 
     with db.connection() as conn:
         rows = conn.execute(
@@ -150,11 +151,11 @@ def test_upsert_idempotent(parsed):
                            r["role"], r["meta"], r["active"], r["created_at"])
             for r in rows
         }
-    assert len(rows) == 28
+    assert len(rows) == 30
 
     with db.connection() as conn:
         second = upsert_all(conn, questions)
-    assert second == {"inserted": 0, "updated": 28}
+    assert second == {"inserted": 0, "updated": 30}
 
     with db.connection() as conn:
         rows2 = conn.execute(
@@ -166,7 +167,7 @@ def test_upsert_idempotent(parsed):
             for r in rows2
         }
     # 两遍导入后行数不变，内容字段一致，id/created_at 未被改动
-    assert len(rows2) == 28
+    assert len(rows2) == 30
     assert snapshot2 == snapshot
 
     # meta 落库为合法 JSON 且 body 与解析结果一致
