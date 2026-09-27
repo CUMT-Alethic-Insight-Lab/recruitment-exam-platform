@@ -246,6 +246,7 @@ class ReviewSessionOut(BaseModel):
     comment: str | None = None
     score_updated_at: str | None = None
     question_meta: list[dict] = Field(default_factory=list)
+    slots: dict = Field(default_factory=dict)
 
 
 class InterviewUpsert(BaseModel):

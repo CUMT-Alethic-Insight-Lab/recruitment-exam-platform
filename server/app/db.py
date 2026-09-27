@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS exam_session (
     cleaned_file_path TEXT,
     repo_url         TEXT,
     attachment_file_path TEXT,
+    slots            TEXT NOT NULL DEFAULT '{}',
     FOREIGN KEY (campaign_id, student_id)
         REFERENCES application (campaign_id, student_id)
 );
@@ -204,6 +205,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE exam_session ADD COLUMN repo_url TEXT")
     if "attachment_file_path" not in session_cols:
         conn.execute("ALTER TABLE exam_session ADD COLUMN attachment_file_path TEXT")
+    if "slots" not in session_cols:
+        conn.execute(
+            "ALTER TABLE exam_session ADD COLUMN slots TEXT NOT NULL DEFAULT '{}'")
     app_cols = {r["name"] for r in conn.execute("PRAGMA table_info(application)")}
     if "pw_salt" not in app_cols:
         conn.execute("ALTER TABLE application ADD COLUMN pw_salt TEXT")

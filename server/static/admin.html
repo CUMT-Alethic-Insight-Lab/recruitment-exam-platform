@@ -257,6 +257,7 @@ __TOPBAR__
           <div class="review-stats" id="review-stats"></div>
           <div class="review-meta" id="review-meta"></div>
           <div id="review-question-meta" class="hidden" style="display:grid;gap:8px;margin-bottom:10px"></div>
+          <div id="review-slot-tabs" class="hidden" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"></div>
           <div id="review-timeline"></div>
           <div class="card" style="margin-top:12px">
             <h2 style="font-size:16px;margin-top:0">评分</h2>
@@ -413,6 +414,7 @@ let campaigns = [];
 let currentApps = [];
 let reviewSessions = [];
 let currentReviewSid = null;
+let currentReviewSlot = null;
 let currentReviewEvents = [];
 
 function hexToBytes(hex) {
@@ -776,10 +778,11 @@ async function refreshSessions() {
   document.getElementById('session-count').textContent = `共 ${list.length} 个会话`;
 }
 
-function downloadSessionFile(sid, kind) {
+function downloadSessionFile(sid, kind, slot) {
   const cid = selectedCid();
   if (!cid) return;
-  fetch(`__PREFIX__/api/campaigns/${cid}/sessions/${sid}/files/${kind}`, { headers: { 'Authorization': 'Bearer ' + getToken() } })
+  const qs = (slot !== undefined && slot !== null) ? `?slot=${slot}` : '';
+  fetch(`__PREFIX__/api/campaigns/${cid}/sessions/${sid}/files/${kind}${qs}`, { headers: { 'Authorization': 'Bearer ' + getToken() } })
     .then(res => {
       if (!res.ok) throw new Error('下载失败');
       return res.blob();
@@ -788,7 +791,8 @@ function downloadSessionFile(sid, kind) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = kind === 'attachment' ? `attachment_${sid}.zip` : `cleaned_${sid}`;
+      a.download = kind === 'attachment' ? `attachment_${sid}.zip`
+        : `cleaned_${sid}${qs ? `_q${slot}` : ''}`;
       a.click();
       URL.revokeObjectURL(url);
     })
@@ -840,7 +844,7 @@ async function refreshReviewSessions() {
     <div class="review-item${s.session_id === currentReviewSid ? ' active' : ''}" onclick="openReviewSession('${s.session_id}')">
       <div><strong>${esc(s.student_name || '')}</strong> <span style="color:var(--muted);font-size:12px">${esc(s.student_id)}</span></div>
       <div style="font-size:12px;color:var(--muted)">${TRACK_LABELS[s.track] || s.track} · ${nowLabel(s.uploaded_at)}</div>
-      <div style="margin-top:4px">${scoreBadge(s)}${s.stored_lan ? ' <span class="badge draft" title="轨迹文件存于考场局域网接收机，请从接收机调取">局域网</span>' : ''}</div>
+      <div style="margin-top:4px">${scoreBadge(s)}${s.slots && Object.keys(s.slots).length ? ` <span class="badge">已交 ${Object.keys(s.slots).length} 题</span>` : ''}${s.stored_lan ? ' <span class="badge draft" title="轨迹文件存于考场局域网接收机，请从接收机调取">局域网</span>' : ''}</div>
     </div>`).join('') || '<p style="color:var(--muted)">暂无已交卷会话</p>';
 }
 
@@ -1150,18 +1154,22 @@ async function openReviewSession(sid) {
   const cid = selectedCid();
   if (!cid) return;
   currentReviewSid = sid;
+  currentReviewSlot = null;
   refreshReviewSessions();
   document.getElementById('review-error').classList.add('hidden');
   document.getElementById('score-msg').textContent = '';
   const s = reviewSessions.find(x => x.session_id === sid) || {};
   renderReviewQuestionMeta(s.question_meta);
+  const slotKeys = Object.keys(s.slots || {}).sort((a, b) => Number(a) - Number(b));
   const metaEl = document.getElementById('review-meta');
   metaEl.innerHTML =
     (s.repo_url ? `<a href="${esc(s.repo_url)}" target="_blank" rel="noopener">打开代码仓库 ↗</a>` : '<span style="color:var(--muted)">无仓库链接</span>')
     + (s.stored_lan
       ? ' <span class="badge draft">轨迹在考场局域网接收机</span>'
-      : ` <a href="#" class="btn small" onclick="downloadSessionFile('${sid}', 'cleaned');return false;">下载清洗件</a>`
-        + ' <button class="btn small secondary" id="copy-timeline-btn">📋 复制轨迹文本</button>');
+      : (slotKeys.length
+        ? ''
+        : ` <a href="#" class="btn small" onclick="downloadSessionFile('${sid}', 'cleaned');return false;">下载清洗件</a>`)
+      + ' <button class="btn small secondary" id="copy-timeline-btn">📋 复制轨迹文本</button>');
   const copyBtn = document.getElementById('copy-timeline-btn');
   if (copyBtn) copyBtn.addEventListener('click', () => copyTimelineText(copyBtn));
   document.getElementById('score-increment').value = isScored(s) ? s.increment_score : '';
@@ -1170,6 +1178,23 @@ async function openReviewSession(sid) {
   document.getElementById('score-comment').value = s.comment || '';
   document.getElementById('review-detail').classList.remove('hidden');
   currentReviewEvents = [];
+  const tabsEl = document.getElementById('review-slot-tabs');
+  if (slotKeys.length) {
+    // 逐题提交：每题一个页签，各自加载各自的清洗件
+    tabsEl.classList.remove('hidden');
+    tabsEl.innerHTML = slotKeys.map(k => {
+      const q = (s.question_meta || [])[Number(k)] || {};
+      const label = `第 ${Number(k) + 1} 题${q.title ? ' · ' + q.title : ''}`;
+      return `<button class="btn small secondary review-slot-tab" data-slot="${esc(k)}">${esc(label)}</button>`;
+    }).join('') + ` <a href="#" class="btn small" id="slot-dl-link">下载本题清洗件</a>`;
+    tabsEl.querySelectorAll('.review-slot-tab').forEach(btn => {
+      btn.addEventListener('click', () => openReviewSlot(sid, btn.dataset.slot));
+    });
+    await openReviewSlot(sid, slotKeys[0]);
+    return;
+  }
+  tabsEl.classList.add('hidden');
+  tabsEl.innerHTML = '';
   if (s.stored_lan) {
     document.getElementById('review-stats').textContent = '';
     document.getElementById('review-timeline').innerHTML =
@@ -1183,6 +1208,30 @@ async function openReviewSession(sid) {
     document.getElementById('review-stats').textContent = '';
     document.getElementById('review-timeline').innerHTML = '';
     showReviewError('清洗件加载失败');
+    return;
+  }
+  const events = await res.json();
+  currentReviewEvents = Array.isArray(events) ? events : [];
+  renderReviewTimeline(currentReviewEvents);
+}
+
+async function openReviewSlot(sid, slot) {
+  const cid = selectedCid();
+  if (!cid) return;
+  currentReviewSlot = slot;
+  document.querySelectorAll('.review-slot-tab').forEach(b => {
+    b.style.borderColor = b.dataset.slot === String(slot) ? 'var(--primary)' : '';
+    b.style.boxShadow = b.dataset.slot === String(slot) ? '0 0 0 1px var(--primary)' : '';
+  });
+  const dl = document.getElementById('slot-dl-link');
+  if (dl) dl.onclick = () => { downloadSessionFile(sid, 'cleaned', Number(slot)); return false; };
+  document.getElementById('review-error').classList.add('hidden');
+  document.getElementById('review-timeline').innerHTML = '<p style="color:var(--muted)">加载中…</p>';
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/sessions/${sid}/cleaned?slot=${slot}`);
+  if (!res.ok) {
+    document.getElementById('review-stats').textContent = '';
+    document.getElementById('review-timeline').innerHTML = '';
+    showReviewError('本题清洗件加载失败');
     return;
   }
   const events = await res.json();

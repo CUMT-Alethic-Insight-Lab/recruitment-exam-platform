@@ -1,4 +1,5 @@
 import hmac
+import json
 import shutil
 from pathlib import Path
 
@@ -31,10 +32,14 @@ def upload_session(
     cid: str,
     session_id: str = Form(...),
     repo_url: str = Form(""),
+    slot: int = Form(-1),
     cleaned: UploadFile = File(...),
     attachment: UploadFile | None = File(None),
     x_session_token: str | None = Header(default=None),
 ):
+    """交卷。slot >= 0 时为逐题提交：同一考试会话按题各存一份清洗件
+    （cleaned_q{N}.jsonl，登记进行 slots JSON），每题独立幂等；
+    slot < 0 为旧的整卷单件管线，保持不变。"""
     with db.connection() as conn:
         get_campaign_or_404(conn, cid)
         row = get_session_or_404(conn, session_id)
@@ -43,13 +48,28 @@ def upload_session(
         if not x_session_token or not hmac.compare_digest(
                 row["session_token"], x_session_token):
             raise HTTPException(status_code=401, detail="会话凭证无效")
-        if row["status"] == "uploaded":
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "already_uploaded", "message": "该会话已交卷，请勿重复提交"},
-            )
-        if row["status"] != "draft":
-            raise HTTPException(status_code=409, detail="会话已作废，无法交卷")
+        slot_key = str(slot)
+        try:
+            slots = json.loads(row["slots"] or "{}")
+        except ValueError:
+            slots = {}
+        if slot >= 0:
+            if row["status"] == "voided":
+                raise HTTPException(status_code=409, detail="会话已作废，无法交卷")
+            if slot_key in slots:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "already_uploaded",
+                            "message": "该题已交卷，请勿重复提交"},
+                )
+        else:
+            if row["status"] == "uploaded":
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "already_uploaded", "message": "该会话已交卷，请勿重复提交"},
+                )
+            if row["status"] != "draft":
+                raise HTTPException(status_code=409, detail="会话已作废，无法交卷")
 
         cleaned_name = cleaned.filename or ""
         if not (cleaned_name.endswith(".jsonl") or cleaned_name.endswith(".md")):
@@ -57,7 +77,7 @@ def upload_session(
         if repo_url and not repo_url.startswith(("http://", "https://")):
             raise HTTPException(status_code=400, detail="repo_url 须以 http(s):// 开头")
 
-        attachment_path = None
+        attachment_path = row["attachment_file_path"]
         if attachment is not None and attachment.filename:
             if not attachment.filename.endswith(".zip"):
                 raise HTTPException(status_code=400, detail="附件须为 .zip 文件")
@@ -81,17 +101,34 @@ def upload_session(
         target_dir = _uploads_dir(cid, session_id)
         target_dir.mkdir(parents=True, exist_ok=True)
         ext = ".md" if cleaned_name.endswith(".md") else ".jsonl"
-        cleaned_path = target_dir / f"cleaned{ext}"
-        with cleaned_path.open("wb") as f:
-            shutil.copyfileobj(cleaned.file, f)
-
         uploaded_at = now_iso()
-        conn.execute(
-            "UPDATE exam_session SET status = 'uploaded', uploaded_at = ?,"
-            " cleaned_file_path = ?, repo_url = ?, attachment_file_path = ? WHERE id = ?",
-            (uploaded_at, str(cleaned_path), repo_url or None,
-             attachment_path, session_id),
-        )
+        if slot >= 0:
+            cleaned_path = target_dir / f"cleaned_q{slot}{ext}"
+            with cleaned_path.open("wb") as f:
+                shutil.copyfileobj(cleaned.file, f)
+            slots[slot_key] = {
+                "path": str(cleaned_path),
+                "name": cleaned_name,
+                "uploaded_at": uploaded_at,
+            }
+            conn.execute(
+                "UPDATE exam_session SET status = 'uploaded',"
+                " uploaded_at = COALESCE(uploaded_at, ?),"
+                " slots = ?, repo_url = COALESCE(?, repo_url),"
+                " attachment_file_path = ? WHERE id = ?",
+                (uploaded_at, json.dumps(slots, ensure_ascii=False),
+                 repo_url or None, attachment_path, session_id),
+            )
+        else:
+            cleaned_path = target_dir / f"cleaned{ext}"
+            with cleaned_path.open("wb") as f:
+                shutil.copyfileobj(cleaned.file, f)
+            conn.execute(
+                "UPDATE exam_session SET status = 'uploaded', uploaded_at = ?,"
+                " cleaned_file_path = ?, repo_url = ?, attachment_file_path = ? WHERE id = ?",
+                (uploaded_at, str(cleaned_path), repo_url or None,
+                 attachment_path, session_id),
+            )
         conn.execute(
             "UPDATE application SET status = 'tested', updated_at = ?"
             " WHERE campaign_id = ? AND student_id = ? AND status = 'applied'",
@@ -148,7 +185,8 @@ def mark_lan_uploaded(
 
 @router.get("/{cid}/sessions/{sid}/files/{kind}")
 def download_session_file(
-    cid: str, sid: str, kind: str, _: None = Depends(require_admin)
+    cid: str, sid: str, kind: str, slot: int | None = None,
+    _: None = Depends(require_admin),
 ):
     if kind not in ("cleaned", "attachment"):
         raise HTTPException(status_code=404, detail="无效文件类型")
@@ -159,6 +197,13 @@ def download_session_file(
             raise HTTPException(status_code=404, detail="会话不属于该批次")
         if kind == "cleaned":
             path = row["cleaned_file_path"]
+            if slot is not None:
+                try:
+                    slots = json.loads(row["slots"] or "{}")
+                except ValueError:
+                    slots = {}
+                entry = slots.get(str(slot))
+                path = entry.get("path") if entry else None
             media_type = "application/octet-stream"
         else:
             path = row["attachment_file_path"]

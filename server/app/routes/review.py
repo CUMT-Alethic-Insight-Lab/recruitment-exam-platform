@@ -61,7 +61,9 @@ def list_review_sessions(cid: str):
         rows = conn.execute(
             """
             SELECT s.id AS session_id, s.student_id, s.track, s.uploaded_at, s.repo_url,
-                   (s.cleaned_file_path IS NULL) AS stored_lan,
+                   s.slots,
+                   (s.cleaned_file_path IS NULL
+                    AND (s.slots IS NULL OR s.slots = '{}')) AS stored_lan,
                    a.name AS student_name,
                    sc.increment_score, sc.human_rate, sc.scorer, sc.comment,
                    sc.updated_at AS score_updated_at
@@ -76,21 +78,42 @@ def list_review_sessions(cid: str):
         ).fetchall()
         items = []
         for r in rows:
-            item = ReviewSessionOut(
-                **dict(r), question_meta=_question_meta(conn, r["session_id"])
-            )
-            items.append(item)
+            data = dict(r)
+            raw_slots = data.pop("slots", None)
+            try:
+                slots = {
+                    k: {"uploaded_at": v.get("uploaded_at"), "name": v.get("name")}
+                    for k, v in json.loads(raw_slots or "{}").items()
+                    if isinstance(v, dict)
+                }
+            except ValueError:
+                slots = {}
+            items.append(ReviewSessionOut(
+                **data, slots=slots,
+                question_meta=_question_meta(conn, r["session_id"]),
+            ))
         return items
 
 
 @router.get("/{cid}/sessions/{sid}/cleaned")
-def get_cleaned(cid: str, sid: str):
+def get_cleaned(cid: str, sid: str, slot: int | None = None):
+    """评审取清洗件。slot 不为 None 时取逐题提交中对应题的 cleaned_q{N} 文件。"""
     with db.connection() as conn:
         get_campaign_or_404(conn, cid)
         session = _get_session(conn, cid, sid)
-        if session["status"] != "uploaded" or not session["cleaned_file_path"]:
+        if session["status"] != "uploaded":
             raise HTTPException(status_code=404, detail="该会话没有已上传的 cleaned 文件")
-        path = Path(session["cleaned_file_path"])
+        path_str = session["cleaned_file_path"]
+        if slot is not None:
+            try:
+                slots = json.loads(session["slots"] or "{}")
+            except ValueError:
+                slots = {}
+            entry = slots.get(str(slot))
+            path_str = entry.get("path") if entry else None
+        if not path_str:
+            raise HTTPException(status_code=404, detail="该会话没有已上传的 cleaned 文件")
+        path = Path(path_str)
         if not path.is_file():
             raise HTTPException(status_code=404, detail="cleaned 文件不存在")
         items = []
