@@ -571,6 +571,7 @@ section[data-title="成果"] .load.cert .cert-cap { font-size:22px; }
     <!-- 全局页脚 -->
     <div class="chrome chrome-foot">
       <span>ALETHICINSIGHT.COM/RECRUITMENT</span>
+      <span class="beian" id="beian-info"></span>
       <span class="pageno" id="pageno"></span>
     </div>
     <div class="progress" id="progress"></div>
@@ -955,6 +956,28 @@ section[data-title="成果"] .load.cert .cert-cap { font-size:22px; }
     btn.classList.add('off');
     hint.classList.remove('hidden');
   }
+})();
+</script>
+<script>
+/* 备案信息展示：ICP 备案号与公安备案号下发后填入下面三个常量即自动显示在页脚。
+   GONGAN_CODE 是公安备案号里的纯数字 recordcode（备案号本身保留汉字与空格）。 */
+(function () {
+  var ICP_BEIAN = "";      // 例："蜀ICP备2026xxxxxx号-1"
+  var GONGAN_BEIAN = "";   // 例："川公网安备 5101xxxxxxxxxxx 号"
+  var GONGAN_CODE = "";    // 例："5101xxxxxxxxxxx"
+  var el = document.getElementById("beian-info");
+  if (!el) return;
+  var parts = [];
+  if (ICP_BEIAN) {
+    parts.push('<a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener"'
+      + ' style="color:inherit;text-decoration:none;">' + ICP_BEIAN + "</a>");
+  }
+  if (GONGAN_BEIAN && GONGAN_CODE) {
+    parts.push('<a href="http://www.beian.gov.cn/portal/registerSystemInfo?recordcode='
+      + GONGAN_CODE + '" target="_blank" rel="noopener"'
+      + ' style="color:inherit;text-decoration:none;">' + GONGAN_BEIAN + "</a>");
+  }
+  el.innerHTML = parts.join('<span class="sep" style="margin:0 8px;opacity:.4;">·</span>');
 })();
 </script>
 </body>
