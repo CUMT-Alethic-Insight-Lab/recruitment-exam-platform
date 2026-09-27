@@ -30,10 +30,28 @@
 .review-meta { margin-bottom: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #review-timeline { max-height: 55vh; overflow: auto; border: 1px solid var(--border); border-radius: 2px; padding: 10px; display: grid; gap: 8px; }
 .ev-time { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; font-family: var(--font-mono); }
-.ev-user { background: rgba(48, 80, 240, 0.07); border-left: 3px solid #3050f0; border-radius: 2px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
-.ev-assistant { background: rgba(19, 23, 32, 0.04); border-left: 3px solid #8a90a4; border-radius: 2px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
-.ev-tool { font-family: var(--font-mono); font-size: 12.5px; border: 1px dashed var(--border); border-radius: 2px; padding: 3px 8px; white-space: pre-wrap; word-break: break-word; }
-.ev-tool-err { color: #b91c1c; border-color: #fca5a5; background: #fef2f2; }
+.ev-user { background: var(--ev-user-bg); border-left: 3px solid var(--ev-user-bar); border-radius: 2px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+.ev-assistant { background: var(--ev-assistant-bg); border-left: 3px solid var(--ev-assistant-bar); border-radius: 2px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+/* 评审轨迹：md 正文与代码一律自动换行，绝不横向溢出 */
+.ev-user .md-body, .ev-assistant .md-body { white-space: normal; }
+.md-body * { overflow-wrap: anywhere; }
+.md-body p { margin: 4px 0; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 { margin: 8px 0 4px; font-size: 14px; }
+.md-body h3, .md-body h4 { font-size: 13px; }
+.md-body ul, .md-body ol { margin: 4px 0; padding-left: 20px; }
+.md-body blockquote { margin: 4px 0; padding: 2px 10px; border-left: 3px solid var(--border); color: var(--muted); }
+.md-body hr { border: none; border-top: 1px solid var(--border); margin: 8px 0; }
+.md-body a { color: var(--primary); }
+.md-body code { white-space: pre-wrap; background: var(--chip-bg); border-radius: 3px; padding: 0 3px; font-size: 12px; font-family: var(--font-mono); }
+.md-body pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-hover); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; margin: 6px 0; font-size: 12px; font-family: var(--font-mono); }
+.md-body pre code { background: none; padding: 0; }
+.ev-model { text-align: center; font-size: 12px; color: var(--muted); font-family: var(--font-mono); letter-spacing: 0.03em; }
+details.ev-tool { font-family: var(--font-mono); font-size: 12.5px; border: 1px dashed var(--border); border-left: 3px solid var(--badge-amber-fg); border-radius: 2px; padding: 4px 8px; background: var(--card); }
+details.ev-tool > summary { cursor: pointer; overflow-wrap: anywhere; }
+details.ev-tool.ev-tool-err { border-color: var(--warn-border); background: var(--warn-bg); }
+details.ev-tool.ev-tool-err > summary { color: var(--warn-fg); }
+.ev-tool-body { padding: 6px 0 2px; font-size: 12px; color: var(--muted); display: grid; gap: 4px; }
+.ev-tool-out { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-hover); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; max-height: 240px; overflow: auto; color: var(--text); }
 .ev-minor { font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); padding: 2px 0; }
 details.subagent { border: 1px solid var(--border); border-radius: 2px; padding: 4px 8px; }
 details.subagent > summary { cursor: pointer; font-size: 13px; color: var(--primary); font-weight: 600; }
@@ -395,6 +413,7 @@ let campaigns = [];
 let currentApps = [];
 let reviewSessions = [];
 let currentReviewSid = null;
+let currentReviewEvents = [];
 
 function hexToBytes(hex) {
   const bytes = new Uint8Array(hex.length / 2);
@@ -838,15 +857,123 @@ function truncText(s, n = 300) {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
+// 最小 markdown 渲染器（纯 JS、无外部依赖、离线可用）：先整体转义再渲染子集——
+// 标题 #~####、**加粗**、*斜体*、`行内代码`、``` 围栏代码块、-/*/ + 无序列表、
+// 1. 有序列表、> 引用块、--- 分割线、[链接](http...)（新窗口 rel=noopener 打开）。
+function mdToHtml(src) {
+  const escapeHtml = s => String(s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const inline = (raw) => {
+    const codes = [];
+    // 行内代码先抽成占位符，避免内部的 * [ 等被其他行内规则误伤
+    let s = String(raw).replace(/`([^`\n]+)`/g,
+      (m, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+    s = escapeHtml(s);
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[^*])\*([^*\s][^*\n]*)\*/g, '$1<em>$2</em>');
+    s = s.replace(/\u0000(\d+)\u0000/g, (m, i) => `<code>${escapeHtml(codes[+i])}</code>`);
+    return s;
+  };
+  const BLOCK_START = /^(?:```|#{1,4}\s|\s*>|\s*(?:[-*+]\s|\d+(?:[.)]\s|、))|\s*(?:-{3,}|\*{3,}|_{3,})\s*$)/;
+  const lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    let m;
+    if (/^```/.test(line)) {
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++; // 跳过收尾围栏；未闭合时自然越界结束
+      out.push(`<pre><code>${escapeHtml(buf.join('\n'))}</code></pre>`);
+    } else if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      out.push('<hr>');
+      i++;
+    } else if ((m = line.match(/^(#{1,4})\s+(.*)$/))) {
+      const lv = m[1].length;
+      out.push(`<h${lv}>${inline(m[2].trim())}</h${lv}>`);
+      i++;
+    } else if (/^\s*>/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        buf.push(lines[i].replace(/^\s*>\s?/, ''));
+        i++;
+      }
+      out.push(`<blockquote>${inline(buf.join('\n')).replace(/\n/g, '<br>')}</blockquote>`);
+    } else if (/^\s*[-*+]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*[-*+]\s+/, ''));
+        i++;
+      }
+      out.push(`<ul>${items.map(t => `<li>${inline(t)}</li>`).join('')}</ul>`);
+    } else if (/^\s*\d+(?:[.)]\s+|、\s*)/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+(?:[.)]\s+|、\s*)/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*\d+(?:[.)]\s+|、\s*)/, ''));
+        i++;
+      }
+      out.push(`<ol>${items.map(t => `<li>${inline(t)}</li>`).join('')}</ol>`);
+    } else if (!line.trim()) {
+      i++;
+    } else {
+      const buf = [];
+      while (i < lines.length && lines[i].trim() && !BLOCK_START.test(lines[i])) {
+        buf.push(lines[i]);
+        i++;
+      }
+      out.push(`<p>${inline(buf.join('\n')).replace(/\n/g, '<br>')}</p>`);
+    }
+  }
+  return out.join('');
+}
+
+function oneLineText(s) {
+  return String(s == null ? '' : s).split('\n').map(l => l.trim()).filter(Boolean).join(' / ');
+}
+
+// 工具参数摘要：整段 JSON 转 key=value 罗列，避免评审看到一堆括号
+function plainArgText(arg) {
+  let s = String(arg == null ? '' : arg).trim();
+  if (s.startsWith('{') && s.endsWith('}')) {
+    try {
+      const obj = JSON.parse(s);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        s = Object.entries(obj)
+          .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+          .join('；');
+      }
+    } catch (err) { /* 非 JSON 则原样展示 */ }
+  }
+  return oneLineText(s);
+}
+
 function renderReviewEvent(e) {
   switch (e.k) {
     case 'user':
     case 'assistant':
-      return `<div class="ev-${e.k}"><span class="ev-time">${epochLabel(e.time)}</span>${esc(e.text || '')}</div>`;
+      return `<div class="ev-${e.k}"><span class="ev-time">${epochLabel(e.time)}</span><div class="md-body">${mdToHtml(e.text || '')}</div></div>`;
     case 'tool': {
-      const err = e.err ? ` ／ERR: ${truncText(e.err, 200)}` : '';
-      const out = e.out_len !== undefined && e.out_len !== null ? `（输出 ${e.out_len} 字符）` : '';
-      return `<div class="ev-tool${e.err ? ' ev-tool-err' : ''}">🔧 ${esc(e.name || '')}${e.arg ? ' ' + esc(truncText(e.arg, 200)) : ''}${out}${err}</div>`;
+      const arg = plainArgText(e.arg);
+      const summary = `🔧 ${esc(e.name || '工具')}${arg ? '　' + esc(truncText(arg, 120)) : ''}`
+        + ` <span class="ev-time" style="display:inline">${epochLabel(e.time, false)}</span>`
+        + (e.err ? ' · ❌ 错误' : '');
+      const body = [];
+      if (e.err) {
+        body.push(`<div style="color:var(--warn-fg)">❌ 工具执行出错${typeof e.err === 'string' ? '：' + esc(truncText(e.err, 300)) : ''}</div>`);
+      }
+      if (e.out_len !== undefined && e.out_len !== null) {
+        body.push(`<div>输出 ${esc(e.out_len)} 字符</div>`);
+      }
+      const outText = (typeof e._out === 'string' && e._out)
+        || (typeof e.out === 'string' && e.out) || '';
+      if (outText.trim()) {
+        body.push(`<pre class="ev-tool-out">${esc(truncText(outText, 4000))}</pre>`);
+      }
+      return `<details class="ev-tool${e.err ? ' ev-tool-err' : ''}"><summary>${summary}</summary><div class="ev-tool-body">${body.join('') || '<div>无更多详情</div>'}</div></details>`;
     }
     case 'task':
     case 'todo':
@@ -855,6 +982,20 @@ function renderReviewEvent(e) {
     default:
       return `<div class="ev-minor">[${esc(e.k)}] ${esc(truncText(e.text || e.name || '', 120))}</div>`;
   }
+}
+
+// 顺序渲染事件列表：assistant 的 model 首次出现或发生切换时，在该卡片前插模型分隔行
+function renderEventSeq(evs) {
+  let lastModel = null;
+  const parts = [];
+  for (const e of evs) {
+    if (e.k === 'assistant' && e.model && e.model !== lastModel) {
+      parts.push(`<div class="ev-model">── 模型：${esc(e.model)} ──</div>`);
+      lastModel = e.model;
+    }
+    parts.push(renderReviewEvent(e));
+  }
+  return parts.join('');
 }
 
 function renderReviewTimeline(events) {
@@ -877,11 +1018,73 @@ function renderReviewTimeline(events) {
     if (agent === 'main') main.push(e);
     else (sub[agent] = sub[agent] || []).push(e);
   });
-  let html = main.map(renderReviewEvent).join('');
+  let html = renderEventSeq(main);
   for (const [agent, evs] of Object.entries(sub)) {
-    html += `<details class="subagent"><summary>${esc(agent)}（${evs.length} 条）</summary><div class="subagent-body">${evs.map(renderReviewEvent).join('')}</div></details>`;
+    html += `<details class="subagent"><summary>${esc(agent)}（${evs.length} 条）</summary><div class="subagent-body">${renderEventSeq(evs)}</div></details>`;
   }
   document.getElementById('review-timeline').innerHTML = html || '<p style="color:var(--muted)">无事件</p>';
+}
+
+// 轨迹 → 纯文本（供「复制轨迹文本」）：代理分节 + 模型分隔行 + 轮次标题/正文 + 工具一行
+const REVIEW_KIND_LABELS = { user: '👤 用户', assistant: '🤖 助手', tool: '🔧 工具', task: '🧵 后台任务', todo: '✅ Todo', compaction: '🗜️ 压缩摘要' };
+
+function buildTimelineText(events) {
+  const lines = [];
+  let lastAgent = null, lastModel = null;
+  for (const e of events) {
+    const agent = e.agent || 'main';
+    if (agent !== lastAgent) {
+      if (lines.length) lines.push('');
+      lines.push(`━━━ 代理：${agent} ━━━`);
+      lastAgent = agent;
+      lastModel = null;
+    }
+    const when = epochLabel(e.time);
+    if (e.k === 'user' || e.k === 'assistant') {
+      if (e.k === 'assistant' && e.model && e.model !== lastModel) {
+        lines.push(`── 模型：${e.model} ──`);
+        lastModel = e.model;
+      }
+      lines.push('', `【${REVIEW_KIND_LABELS[e.k]} · ${when}】`, String(e.text || '').trim());
+    } else if (e.k === 'tool') {
+      let line = `【🔧 工具：${e.name || ''} · ${when}】`;
+      const arg = plainArgText(e.arg);
+      if (arg) line += ` 参数：${truncText(arg, 200)}`;
+      if (e.err) line += ' ❌ 错误';
+      if (e.out_len !== undefined && e.out_len !== null) line += `（输出 ${e.out_len} 字符）`;
+      lines.push(line);
+    } else {
+      const label = REVIEW_KIND_LABELS[e.k] || e.k || '事件';
+      lines.push(`【${label} · ${when}】 ${truncText(String(e.text || e.name || '').trim(), 300)}`);
+    }
+  }
+  return lines.join('\n').replace(/^\n+/, '');
+}
+
+async function copyTimelineText(btn) {
+  if (!currentReviewEvents.length) { alert('暂无可复制的轨迹内容'); return; }
+  const text = buildTimelineText(currentReviewEvents);
+  let ok = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    ok = true;
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+    ta.remove();
+  }
+  if (ok && btn) {
+    btn.textContent = '已复制 ✓';
+    btn.disabled = true;
+    setTimeout(() => { btn.textContent = '📋 复制轨迹文本'; btn.disabled = false; }, 1500);
+  } else if (!ok) {
+    alert('复制失败，请手动复制');
+  }
 }
 
 function renderReviewQuestionMeta(items) {
@@ -916,12 +1119,16 @@ async function openReviewSession(sid) {
     (s.repo_url ? `<a href="${esc(s.repo_url)}" target="_blank" rel="noopener">打开代码仓库 ↗</a>` : '<span style="color:var(--muted)">无仓库链接</span>')
     + (s.stored_lan
       ? ' <span class="badge draft">轨迹在考场局域网接收机</span>'
-      : ` <a href="#" class="btn small" onclick="downloadSessionFile('${sid}', 'cleaned');return false;">下载清洗件</a>`);
+      : ` <a href="#" class="btn small" onclick="downloadSessionFile('${sid}', 'cleaned');return false;">下载清洗件</a>`
+        + ' <button class="btn small secondary" id="copy-timeline-btn">📋 复制轨迹文本</button>');
+  const copyBtn = document.getElementById('copy-timeline-btn');
+  if (copyBtn) copyBtn.addEventListener('click', () => copyTimelineText(copyBtn));
   document.getElementById('score-increment').value = isScored(s) ? s.increment_score : '';
   document.getElementById('score-human').value = (s.human_rate === null || s.human_rate === undefined) ? '' : s.human_rate;
   document.getElementById('score-scorer').value = s.scorer || '';
   document.getElementById('score-comment').value = s.comment || '';
   document.getElementById('review-detail').classList.remove('hidden');
+  currentReviewEvents = [];
   if (s.stored_lan) {
     document.getElementById('review-stats').textContent = '';
     document.getElementById('review-timeline').innerHTML =
@@ -938,7 +1145,8 @@ async function openReviewSession(sid) {
     return;
   }
   const events = await res.json();
-  renderReviewTimeline(Array.isArray(events) ? events : []);
+  currentReviewEvents = Array.isArray(events) ? events : [];
+  renderReviewTimeline(currentReviewEvents);
 }
 
 function readScoreNumber(id) {

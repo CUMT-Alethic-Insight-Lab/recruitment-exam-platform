@@ -168,24 +168,17 @@ def enroll(cid: str, body: EnrollBody,
                         "session_id": existing["id"],
                         **{k: v for k, v in _serve_response(existing, cfg).items()}},
             )
-        prev_uploaded = conn.execute(
-            "SELECT 1 FROM exam_session WHERE campaign_id = ? AND student_id = ?"
-            " AND status = 'uploaded'",
-            (cid, student_id),
-        ).fetchone()
-        if prev_uploaded is not None:
-            raise HTTPException(
-                status_code=409,
-                detail={"code": "already_uploaded",
-                        "message": "该学号已交卷，如需重考请由监考作废原会话后再开考"},
-            )
         cfg = exam_config_for(campaign)
         domains = json.loads(app["domains"])
         if body.question_ids is not None:
             qrows = pick_selected_questions(conn, body.question_ids)
             if body.track == "track3":
                 check_track3_domains(qrows, domains)
-            session_domains = domains
+                # 按领域交卷：track3 会话只记本次所选题目的领域（每领域至多一题
+                # 已在上面去重），供「该领域是否已交卷」与考生自查对账
+                session_domains = list(dict.fromkeys(r["domain"] for r in qrows))
+            else:
+                session_domains = domains
         elif body.track == "track3":
             # M12 自由创作：track3 必须二选一——question_ids 选题（上面的分支）
             # 或 domain 自由发挥（不发题，只记领域）；不再随机发 track3 题。
@@ -201,6 +194,34 @@ def enroll(cid: str, body: EnrollBody,
                           else cfg["track2_per_domain"])
             qrows = pick_questions(conn, domains, body.track, per_domain)
             session_domains = domains
+        # 已交卷约束：track1/track2 一锤定音（有 uploaded 会话即 409）；
+        # track3 按领域独立交卷——本次目标领域与已交会话 domain_tags 有交集才 409
+        uploaded_rows = conn.execute(
+            "SELECT domain_tags FROM exam_session WHERE campaign_id = ?"
+            " AND student_id = ? AND status = 'uploaded'",
+            (cid, student_id),
+        ).fetchall()
+        if body.track == "track3":
+            done_domains: set[str] = set()
+            for r in uploaded_rows:
+                try:
+                    done_domains.update(json.loads(r["domain_tags"] or "[]"))
+                except ValueError:
+                    continue
+            overlap = [d for d in session_domains if d in done_domains]
+            if overlap:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "domain_already_uploaded",
+                            "message": "领域「" + "、".join(overlap)
+                                       + "」已交卷，每个领域只能提交一次；"
+                                         "如需重交请由监考作废原会话",
+                            "domains": overlap})
+        elif uploaded_rows:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "already_uploaded",
+                        "message": "该学号已交卷，如需重考请由监考作废原会话后再开考"})
         sid = uuid.uuid4().hex[:16]
         token = secrets.token_urlsafe(32)
         machine_id = uuid.uuid4().hex[:16]
@@ -296,6 +317,39 @@ def public_questions(cid: str, _: str = Depends(require_applicant)):
         ).fetchall()
         return [PublicQuestionOut(id=r["id"], domain=r["domain"], track=r["track"],
                                   title=r["title"], body=r["body"]) for r in rows]
+
+
+@router.get("/{cid}/exam/my_sessions")
+def my_sessions(cid: str, student_id: str = Depends(require_applicant)):
+    """考生自查本人本届的考试会话列表（按 domain_tags 对账各领域完成状态）。
+
+    返回 [{session_id, track, domain_tags, status, opened_at, uploaded_at,
+    repo_url}]，新的在前；已作废会话保留并以 status="voided" 标注
+    （页面只把 uploaded 计为「已提交」）。"""
+    with db.connection() as conn:
+        get_campaign_or_404(conn, cid)
+        rows = conn.execute(
+            "SELECT id, track, domain_tags, status, opened_at, uploaded_at, repo_url"
+            " FROM exam_session WHERE campaign_id = ? AND student_id = ?"
+            " ORDER BY opened_at DESC",
+            (cid, student_id),
+        ).fetchall()
+    out = []
+    for r in rows:
+        try:
+            tags = json.loads(r["domain_tags"] or "[]")
+        except ValueError:
+            tags = []
+        out.append({
+            "session_id": r["id"],
+            "track": r["track"],
+            "domain_tags": tags,
+            "status": r["status"],
+            "opened_at": r["opened_at"],
+            "uploaded_at": r["uploaded_at"],
+            "repo_url": r["repo_url"],
+        })
+    return out
 
 
 @router.post("/{cid}/applications/me/project", response_model=ExamSessionOut)
