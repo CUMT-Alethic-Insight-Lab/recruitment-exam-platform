@@ -93,7 +93,7 @@ def test_enroll_track1_serves_questions(client, cid, admin_headers):
     assert res.status_code == 200
     data = res.json()
     assert data["track"] == "track1"
-    assert len(data["questions"]) == 4
+    assert len(data["questions"]) == 2  # 每领域随机 1 道（track1_per_domain=1）
     assert data["session_token"]
     assert data["machine_id"]
     assert set(d["domain"] for d in data["questions"]) == {"llm_arch", "ai_safety"}

@@ -167,8 +167,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
 """
 
 DEFAULT_EXAM_CONFIG = {
-    "track1_per_domain": 2,
-    "track2_per_domain": 2,
+    "track1_per_domain": 1,
+    "track2_per_domain": 1,
     "reroll_limit": 2,
     "track3_guide_text": (
         "自由创作型：请选择一个领域（或结合你的已有项目），"
