@@ -998,6 +998,43 @@ function renderEventSeq(evs) {
   return parts.join('');
 }
 
+// 逐题合并件的分节标记：exam_kit 合并多题交卷时，在每题开头插一条
+// k=task、text 为「━━ 第 N 题 [domain] 标题 ━━」的记录，评审页据此分题展示
+function splitReviewSections(events) {
+  const markers = [];
+  events.forEach((e, i) => {
+    if (e.k === 'task' && typeof e.text === 'string' && /^━━\s*第\s*\d+\s*题/.test(e.text)) {
+      markers.push(i);
+    }
+  });
+  if (!markers.length) return null;
+  const sections = [];
+  if (markers[0] > 0) sections.push({ title: '', events: events.slice(0, markers[0]) });
+  for (let i = 0; i < markers.length; i++) {
+    const end = i + 1 < markers.length ? markers[i + 1] : events.length;
+    sections.push({
+      title: String(events[markers[i]].text || '').replace(/━━/g, '').trim(),
+      events: events.slice(markers[i] + 1, end),
+    });
+  }
+  return sections;
+}
+
+function renderEventsGrouped(events) {
+  const main = [];
+  const sub = {};
+  events.forEach(e => {
+    const agent = e.agent || 'main';
+    if (agent === 'main') main.push(e);
+    else (sub[agent] = sub[agent] || []).push(e);
+  });
+  let html = renderEventSeq(main);
+  for (const [agent, evs] of Object.entries(sub)) {
+    html += `<details class="subagent"><summary>${esc(agent)}（${evs.length} 条）</summary><div class="subagent-body">${renderEventSeq(evs)}</div></details>`;
+  }
+  return html;
+}
+
 function renderReviewTimeline(events) {
   const counts = {};
   let first = null, last = null;
@@ -1011,16 +1048,20 @@ function renderReviewTimeline(events) {
   document.getElementById('review-stats').innerHTML =
     Object.entries(counts).map(([k, c]) => `${esc(k)} ${c}`).join(' · ')
     + ` ｜ 首条 ${epochLabel(first)} － 末条 ${epochLabel(last)}`;
-  const main = [];
-  const sub = {};
-  events.forEach(e => {
-    const agent = e.agent || 'main';
-    if (agent === 'main') main.push(e);
-    else (sub[agent] = sub[agent] || []).push(e);
-  });
-  let html = renderEventSeq(main);
-  for (const [agent, evs] of Object.entries(sub)) {
-    html += `<details class="subagent"><summary>${esc(agent)}（${evs.length} 条）</summary><div class="subagent-body">${renderEventSeq(evs)}</div></details>`;
+  const sections = splitReviewSections(events);
+  let html;
+  if (sections) {
+    html = sections.map(sec => {
+      const body = renderEventsGrouped(sec.events) || '<p style="color:var(--muted)">本题无事件</p>';
+      if (!sec.title) return body;
+      const counts2 = {};
+      sec.events.forEach(e => { counts2[e.k] = (counts2[e.k] || 0) + 1; });
+      const sub2 = Object.entries(counts2).map(([k, c]) => `${esc(k)} ${c}`).join(' · ');
+      return `<div class="iv-section-title">${esc(sec.title)}</div>`
+        + `<div class="review-stats">${sub2 || '无事件'}</div>` + body;
+    }).join('');
+  } else {
+    html = renderEventsGrouped(events);
   }
   document.getElementById('review-timeline').innerHTML = html || '<p style="color:var(--muted)">无事件</p>';
 }
