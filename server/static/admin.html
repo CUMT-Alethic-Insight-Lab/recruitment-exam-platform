@@ -402,7 +402,7 @@ const DOMAIN_LABELS = {
   llm_arch: '语言/LLM', cv_arch: 'CV', vlm_align: 'VLM/MLLM', rl: 'RL',
   agent: 'Agent', memory: '记忆系统', infra: 'AI Infra', ai_safety: 'AI 安全'
 };
-const TRACK_LABELS = { track1: '研发型', track2: '实操型', track3: '自由创作', project: '个人项目' };
+const TRACK_LABELS = { track1: '研发型', track2: '实操型', track3: '自由创作', selected: '题库自选', project: '个人项目' };
 const TRACK_OPTIONS = [{ v: 'track1', t: '研发型（理论/概念导向）' }, { v: 'track2', t: '实操型（落地实践）' }, { v: 'track3', t: '自由创作型' }];
 const EXAM_MODE_LABELS = { standard: '标准机试', own_project: '个人项目', free_creation: '自由发挥' };
 const FOCUS_LABELS = { grades: '绩点学业', student_work: '学生工作', research: '科研', project: '项目经验' };
@@ -628,7 +628,7 @@ async function loadCampaigns() {
 function updateMeta() {
   const c = campaigns.find(x => x.id === selectedCid());
   const meta = document.getElementById('campaign-meta');
-  if (c) meta.textContent = `届次状态：${c.status}；数据截至回收时间：${c.expires_at.slice(0, 10)}（30 天自动回收）`;
+  if (c) meta.textContent = `届次状态：${c.status}；数据回收时间：${c.expires_at.slice(0, 10)}`;
   else meta.textContent = '暂无届次，请先新建。';
 }
 
