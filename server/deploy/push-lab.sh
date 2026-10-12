@@ -62,6 +62,17 @@ ssh "${SSH_OPTS[@]}" "$HOST" "
       exit 1
     fi
   done
+  for i in \$(seq 1 15); do
+    sleep 1
+    if systemctl is-active --quiet alethic-session-receiver && curl -fsS http://127.0.0.1:8897/health >/dev/null; then
+      break
+    fi
+    if [ \"\$i\" = 15 ]; then
+      echo \"ERROR: alethic-session-receiver 健康检查 15s 未通过\" >&2
+      sudo -n journalctl -u alethic-session-receiver --no-pager -n 30 >&2
+      exit 1
+    fi
+  done
 "
 
 echo "[6/6] prune old releases (keep 5)"
