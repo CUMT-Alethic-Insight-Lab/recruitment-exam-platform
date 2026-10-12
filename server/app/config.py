@@ -41,6 +41,20 @@ HEADSCALE_API_KEY = os.environ.get("HEADSCALE_API_KEY", "")
 HEADSCALE_USER_ID = int(os.environ.get("HEADSCALE_USER_ID", "2"))
 LAB_TAILNET_IP = os.environ.get("LAB_TAILNET_IP", "")
 
+# 实例角色（M21）：authoritative=lab 小主机（权威库）；edge=云端 VPS 只读热备。
+# edge 下交卷端点不写主库，multipart 原样暂存 data/staging/{session_id}/，
+# 由 staging_forward（systemd timer）转发 lab 收口成功后删除（云端不留数据）。
+ROLE = os.environ.get("ALE_THIC_ROLE", "authoritative").strip().lower()
+IS_EDGE = ROLE == "edge"
+
+# cloud→lab 暂存转发（edge）：lab 回源地址（含路径前缀，如
+# https://lab-origin.alethicinsight.com/recruitment）与共享密钥；
+# 穿越 CF Access 的服务令牌头可选（见 docs/官网服务器连接文档.md）。
+LAB_ORIGIN_URL = os.environ.get("LAB_ORIGIN_URL", "").rstrip("/")
+STAGING_SECRET = os.environ.get("STAGING_SECRET", "")
+CF_ACCESS_CLIENT_ID = os.environ.get("CF_ACCESS_CLIENT_ID", "")
+CF_ACCESS_CLIENT_SECRET = os.environ.get("CF_ACCESS_CLIENT_SECRET", "")
+
 
 def effective_admin_path() -> str:
     return ADMIN_PUBLIC_PATH or (PUBLIC_PREFIX + "/admin")

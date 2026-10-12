@@ -20,6 +20,7 @@
 .badge.draft { background: #fff7e6; color: #b45309; }
 .badge.uploaded { background: #e3f6e3; color: #15803d; }
 .badge.voided { background: #fee2e2; color: #b91c1c; }
+.badge.pending_sync { background: #e0e7ff; color: #3730a3; }
 .review-layout { display: flex; gap: 14px; align-items: flex-start; }
 .review-list { width: 280px; flex-shrink: 0; max-height: 65vh; overflow: auto; }
 .review-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: 2px; margin-bottom: 8px; cursor: pointer; background: var(--card); }
@@ -411,7 +412,7 @@ const EXAM_MODE_LABELS = { standard: '标准机试', own_project: '个人项目'
 const FOCUS_LABELS = { grades: '绩点学业', student_work: '学生工作', research: '科研', project: '项目经验' };
 const GENDER_LABELS = { male: '男', female: '女' };
 const STATUS_LABELS = { applied: '已报名', tested: '已机试', shortlisted: '预选上榜', interviewed: '已面试', admitted: '录取', rejected: '未录取' };
-const SESSION_STATUS_LABELS = { draft: '开考中', uploaded: '已交卷', voided: '已作废' };
+const SESSION_STATUS_LABELS = { draft: '开考中', uploaded: '已交卷', voided: '已作废', pending_sync: '待同步' };
 
 let campaigns = [];
 let currentApps = [];

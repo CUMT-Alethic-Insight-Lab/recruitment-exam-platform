@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from .. import auth, config, db
+from .. import auth, config, db, staging
 from ..auth import require_admin, require_applicant
 from ..constants import EXAM_TRACKS, MAX_ATTACHMENT_BYTES
 from ..db import DEFAULT_EXAM_CONFIG
@@ -340,7 +340,35 @@ def list_sessions(cid: str, student_id: str | None = None, _: None = Depends(req
     sql += " ORDER BY s.opened_at DESC"
     with db.connection() as conn:
         rows = conn.execute(sql, params).fetchall()
-        return [_row_to_out(r) for r in rows]
+    items = [_row_to_out(r) for r in rows]
+    if config.IS_EDGE:
+        items = _merge_staged_sessions(cid, student_id, items)
+    return items
+
+
+def _merge_staged_sessions(cid: str, student_id: str | None,
+                           items: list[ExamSessionOut]) -> list[ExamSessionOut]:
+    """edge 模式：把 staging 暂存件合入会话列表，标 pending_sync（待同步）。
+
+    暂存件比热备库新：库里还是 draft 的会话直接改标 pending_sync；
+    库里没有（同步窗口内新会话）补合成条目；已 uploaded/voided 以主库为准。"""
+    by_id = {s.id: s for s in items}
+    for meta in staging.list_staged(campaign_id=cid, student_id=student_id):
+        sid = meta.get("session_id") or ""
+        existing = by_id.get(sid)
+        if existing is not None:
+            if existing.status == "draft":
+                existing.status = "pending_sync"
+            continue
+        items.append(ExamSessionOut(
+            id=sid, campaign_id=cid,
+            student_id=meta.get("student_id") or "",
+            machine_id="", track="", domain_tags=[], questions_served=[],
+            rerolls=0, status="pending_sync",
+            opened_at=meta.get("staged_at") or "", uploaded_at=None,
+            repo_url=meta.get("repo_url") or None))
+    items.sort(key=lambda s: s.opened_at or "", reverse=True)
+    return items
 
 
 @router.get("/{cid}/exam/questions", response_model=list[PublicQuestionOut])

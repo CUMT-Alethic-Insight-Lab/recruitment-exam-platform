@@ -1,17 +1,17 @@
+import hashlib
 import hmac
 import json
-import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from .. import cleaned_report, config, db
+from .. import cleaned_report, config, db, staging, submission
 from ..auth import require_admin
 from ..constants import MAX_ATTACHMENT_BYTES  # noqa: F401  兼容既有 import 路径
 from ..schemas import ExamSessionOut
-from .campaigns import get_campaign_or_404, now_iso
+from .campaigns import get_campaign_or_404
 from .exam import _row_to_out, get_session_or_404, save_zip_attachment
 
 router = APIRouter(prefix="/api/campaigns", tags=["uploads"])
@@ -26,6 +26,54 @@ def _uploads_dir(cid: str, sid: str) -> Path:
     return Path(config.DATA_DIR) / "uploads" / cid / sid
 
 
+def _write_with_hash(target: Path, fileobj) -> str:
+    h = hashlib.sha256()
+    with target.open("wb") as f:
+        while chunk := fileobj.read(1024 * 1024):
+            h.update(chunk)
+            f.write(chunk)
+    return h.hexdigest()
+
+
+def _stage_on_edge(cid: str, session_id: str, slot: int, repo_url: str,
+                   cleaned: UploadFile, attachment: UploadFile | None,
+                   token: str | None) -> JSONResponse:
+    """edge（云端只读热备）交卷：不写主库，multipart 原样暂存
+    data/staging/{session_id}/，等 staging_forward 转发 lab 收口（M21）。
+
+    本地热备库能查到会话时同口径校验凭证并带出学号；查不到（30min 同步
+    窗口内新会话）也照常暂存——这正是 edge 存在的意义（隧道抖动不 503）。"""
+    if not staging.SESSION_ID_RE.match(session_id or ""):
+        raise HTTPException(status_code=400, detail="session_id 非法")
+    cleaned_name = cleaned.filename or ""
+    if not (cleaned_name.endswith(".jsonl") or cleaned_name.endswith(".md")):
+        raise HTTPException(status_code=400, detail="清洗件须为 .jsonl 或 .md 文件")
+    if repo_url and not repo_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="repo_url 须以 http(s):// 开头")
+    student_id = ""
+    try:
+        with db.connection() as conn:
+            row = conn.execute(
+                "SELECT campaign_id, student_id, session_token FROM exam_session"
+                " WHERE id = ?", (session_id,)).fetchone()
+    except Exception:
+        row = None  # 热备库不可用/未同步不挡交卷
+    if row is not None:
+        if row["campaign_id"] != cid:
+            raise HTTPException(status_code=404, detail="会话不属于该批次")
+        if not token or not hmac.compare_digest(row["session_token"], token):
+            raise HTTPException(status_code=401, detail="会话凭证无效")
+        student_id = row["student_id"]
+    staging.stage_upload(
+        campaign_id=cid, session_id=session_id, student_id=student_id,
+        slot=slot, repo_url=repo_url, cleaned_name=cleaned_name,
+        cleaned_file=cleaned.file, attachment=attachment)
+    return JSONResponse(
+        status_code=202,
+        content={"status": "pending_sync", "session_id": session_id,
+                 "campaign_id": cid})
+
+
 @router.post("/{cid}/sessions", response_model=ExamSessionOut)
 def upload_session(
     cid: str,
@@ -38,7 +86,11 @@ def upload_session(
 ):
     """交卷。slot >= 0 时为逐题提交：同一考试会话按题各存一份清洗件
     （cleaned_q{N}.jsonl，登记进行 slots JSON），每题独立幂等；
-    slot < 0 为旧的整卷单件管线，保持不变。"""
+    slot < 0 为旧的整卷单件管线，保持不变。
+    edge 实例（云端热备）改为暂存 + pending_sync，不写主库。"""
+    if config.IS_EDGE:
+        return _stage_on_edge(cid, session_id, slot, repo_url, cleaned,
+                              attachment, x_session_token)
     with db.connection() as conn:
         get_campaign_or_404(conn, cid)
         row = get_session_or_404(conn, session_id)
@@ -77,47 +129,25 @@ def upload_session(
             raise HTTPException(status_code=400, detail="repo_url 须以 http(s):// 开头")
 
         attachment_path = row["attachment_file_path"]
+        file_hashes: list[tuple[str, str]] = []
         if attachment is not None and attachment.filename:
             attachment_path = save_zip_attachment(attachment, cid, session_id)
+            file_hashes.append(("attachment", submission.sha256_of(attachment_path)))
 
         target_dir = _uploads_dir(cid, session_id)
         target_dir.mkdir(parents=True, exist_ok=True)
         ext = ".md" if cleaned_name.endswith(".md") else ".jsonl"
-        uploaded_at = now_iso()
-        if slot >= 0:
-            cleaned_path = target_dir / f"cleaned_q{slot}{ext}"
-            with cleaned_path.open("wb") as f:
-                shutil.copyfileobj(cleaned.file, f)
-            slots[slot_key] = {
-                "path": str(cleaned_path),
-                "name": cleaned_name,
-                "uploaded_at": uploaded_at,
-            }
-            conn.execute(
-                "UPDATE exam_session SET status = 'uploaded',"
-                " uploaded_at = COALESCE(uploaded_at, ?),"
-                " slots = ?, repo_url = COALESCE(?, repo_url),"
-                " attachment_file_path = ? WHERE id = ?",
-                (uploaded_at, json.dumps(slots, ensure_ascii=False),
-                 repo_url or None, attachment_path, session_id),
-            )
-        else:
-            cleaned_path = target_dir / f"cleaned{ext}"
-            with cleaned_path.open("wb") as f:
-                shutil.copyfileobj(cleaned.file, f)
-            conn.execute(
-                "UPDATE exam_session SET status = 'uploaded', uploaded_at = ?,"
-                " cleaned_file_path = ?, repo_url = ?, attachment_file_path = ? WHERE id = ?",
-                (uploaded_at, str(cleaned_path), repo_url or None,
-                 attachment_path, session_id),
-            )
-        conn.execute(
-            "UPDATE application SET status = 'tested', updated_at = ?"
-            " WHERE campaign_id = ? AND student_id = ? AND status = 'applied'",
-            (uploaded_at, cid, row["student_id"]),
-        )
-        updated = get_session_or_404(conn, session_id)
-        return _row_to_out(updated)
+        cleaned_path = target_dir / (f"cleaned_q{slot}{ext}" if slot >= 0
+                                     else f"cleaned{ext}")
+        digest = _write_with_hash(cleaned_path, cleaned.file)
+        file_hashes.insert(0, ("cleaned", digest))
+        # 落库收敛点（直连/P2P/转发三路径共用，含台账查重）
+        updated, is_new = submission.commit_uploaded(
+            conn, row, slot=slot, cleaned_path=cleaned_path,
+            cleaned_name=cleaned_name, repo_url=repo_url or None,
+            attachment_path=attachment_path, file_hashes=file_hashes,
+            source="direct")
+    return _row_to_out(updated)
 
 
 @router.post("/{cid}/sessions/{sid}/lan-uploaded", response_model=ExamSessionOut)
@@ -149,20 +179,10 @@ def mark_lan_uploaded(
             raise HTTPException(status_code=409, detail="会话已作废，无法交卷")
         if body.repo_url and not body.repo_url.startswith(("http://", "https://")):
             raise HTTPException(status_code=400, detail="repo_url 须以 http(s):// 开头")
-        uploaded_at = now_iso()
-        conn.execute(
-            "UPDATE exam_session SET status = 'uploaded', uploaded_at = ?,"
-            " cleaned_file_path = NULL, attachment_file_path = NULL, repo_url = ?"
-            " WHERE id = ?",
-            (uploaded_at, body.repo_url or None, sid),
-        )
-        conn.execute(
-            "UPDATE application SET status = 'tested', updated_at = ?"
-            " WHERE campaign_id = ? AND student_id = ? AND status = 'applied'",
-            (uploaded_at, cid, row["student_id"]),
-        )
-        updated = get_session_or_404(conn, sid)
-        return _row_to_out(updated)
+        # P2P 路径同样过收敛点（无文件哈希，台账自然不登记）
+        updated, is_new = submission.commit_uploaded(
+            conn, row, repo_url=body.repo_url or None, source="lan", lan=True)
+    return _row_to_out(updated)
 
 
 @router.get("/{cid}/sessions/{sid}/files/{kind}")

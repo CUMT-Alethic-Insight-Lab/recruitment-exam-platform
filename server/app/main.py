@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import auth, config, db, maintenance
 from .routes import accounts, applications, auth as auth_routes, campaigns, exam, interview, questions, review, uploads
+from .routes import internal as internal_routes
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -129,6 +130,9 @@ app.include_router(questions.router)
 app.include_router(exam.router)
 app.include_router(uploads.router)
 app.include_router(review.router)
+# 内部收口端点仅 authoritative（lab 权威库）挂载；edge 不暴露
+if not config.IS_EDGE:
+    app.include_router(internal_routes.router)
 
 
 @app.get("/api/health")
