@@ -1,0 +1,16 @@
+# Alethic Insight 招新平台 数据回收 systemd 单元（实验室内网小主机版）
+# 安装：
+#   sudo cp deploy/lab/alethic-recruitment-purge.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now alethic-recruitment-purge.timer
+
+[Unit]
+Description=Alethic Insight Recruitment - purge expired campaigns (lab host)
+After=alethic-recruitment.service
+
+[Service]
+Type=oneshot
+User=alethicinsight
+Group=alethicinsight
+WorkingDirectory=/srv/alethic/recruitment/current
+EnvironmentFile=/etc/alethic-recruitment.env
+ExecStart=/srv/alethic/recruitment/venv/bin/python -m app.maintenance

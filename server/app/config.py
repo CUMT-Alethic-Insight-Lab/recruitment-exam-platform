@@ -49,7 +49,7 @@ IS_EDGE = ROLE == "edge"
 
 # cloud→lab 暂存转发（edge）：lab 回源地址（含路径前缀，如
 # https://lab-origin.alethicinsight.com/recruitment）与共享密钥；
-# 穿越 CF Access 的服务令牌头可选（见 docs/官网服务器连接文档.md）。
+# 穿越 CF Access 的服务令牌头可选（部署细节见 org 私有仓 infra-handoff）。
 LAB_ORIGIN_URL = os.environ.get("LAB_ORIGIN_URL", "").rstrip("/")
 STAGING_SECRET = os.environ.get("STAGING_SECRET", "")
 CF_ACCESS_CLIENT_ID = os.environ.get("CF_ACCESS_CLIENT_ID", "")

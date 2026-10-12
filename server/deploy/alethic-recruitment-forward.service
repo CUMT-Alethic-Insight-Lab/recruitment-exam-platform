@@ -1,0 +1,27 @@
+# Alethic Insight 招新平台 暂存转发 systemd 单元（云端 edge，oneshot）
+# 把 data/staging/ 下的交卷暂存件转发到 lab 权威库（ingest-staged），
+# 成功后删除暂存（云端不留数据）；lab 不可达本轮跳过。
+# 安装（服务器上）：
+#   sudo cp /path/to/alethic-recruitment-forward.service /etc/systemd/system/
+#   sudo cp /path/to/alethic-recruitment-forward.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now alethic-recruitment-forward.timer
+# 环境变量文件：/etc/alethic-recruitment.env，至少包含：
+#   ALE_THIC_ROLE=edge
+#   ALE_THIC_DATA_DIR=/var/www/recruitment/data
+#   LAB_ORIGIN_URL=https://lab-origin.alethicinsight.com/recruitment
+#   STAGING_SECRET=<与 lab 一致的共享密钥>
+#   CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET（lab 回源若挂 CF Access）
+
+[Unit]
+Description=Alethic Insight Recruitment - forward staged submissions to lab
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/recruitment/current
+EnvironmentFile=/etc/alethic-recruitment.env
+ExecStart=/var/www/recruitment/venv/bin/python -m app.staging_forward

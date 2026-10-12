@@ -1,0 +1,22 @@
+# Alethic Insight 机试会话局域网接收机 systemd 单元（实验室内网小主机）
+# 考试机 config.json 的 upload_mode=lan 时，清洗后的轨迹文档传到本服务。
+# 安装：
+#   sudo cp deploy/lab/alethic-session-receiver.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now alethic-session-receiver
+# 接收机源码由 deploy/push-lab.sh 从本仓库 exam_kit/session_receiver.py 一并推送。
+
+[Unit]
+Description=Alethic Insight exam session LAN receiver
+After=network.target
+
+[Service]
+Type=simple
+User=alethicinsight
+Group=alethicinsight
+ExecStart=/usr/bin/python3 /srv/alethic/receiver/session_receiver.py \
+    --host 0.0.0.0 --port 8897 --root /srv/alethic/received_sessions
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

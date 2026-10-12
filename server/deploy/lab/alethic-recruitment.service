@@ -1,0 +1,26 @@
+# Alethic Insight 招新平台 systemd 单元（实验室内网小主机版）
+# 安装：
+#   sudo cp deploy/lab/alethic-recruitment.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now alethic-recruitment
+# 环境变量文件：/etc/alethic-recruitment.env（0600 root:root），至少包含：
+#   ADMIN_TOKEN=<与云端一致>
+#   PUBLIC_PREFIX=/recruitment
+#   ADMIN_PUBLIC_PATH=/admin/recruitment
+#   ALE_THIC_DATA_DIR=/srv/alethic/recruitment/data
+
+[Unit]
+Description=Alethic Insight Recruitment (FastAPI via uvicorn, lab host)
+After=network.target
+
+[Service]
+Type=simple
+User=alethicinsight
+Group=alethicinsight
+WorkingDirectory=/srv/alethic/recruitment/current
+EnvironmentFile=/etc/alethic-recruitment.env
+ExecStart=/srv/alethic/recruitment/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8901
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

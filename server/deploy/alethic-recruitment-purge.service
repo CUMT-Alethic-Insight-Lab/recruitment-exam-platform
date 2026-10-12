@@ -1,0 +1,20 @@
+# Alethic Insight 招新平台 数据回收 systemd 单元（oneshot）
+# 安装（服务器上）：
+#   sudo cp /path/to/alethic-recruitment-purge.service /etc/systemd/system/
+#   sudo cp /path/to/alethic-recruitment-purge.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now alethic-recruitment-purge.timer
+# 环境变量文件：/etc/alethic-recruitment.env，至少包含：
+#   ALE_THIC_DATA_DIR=/var/www/recruitment/data
+
+[Unit]
+Description=Alethic Insight Recruitment - purge expired campaigns
+After=alethic-recruitment.service
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/recruitment/current
+EnvironmentFile=/etc/alethic-recruitment.env
+ExecStart=/var/www/recruitment/venv/bin/python -m app.maintenance

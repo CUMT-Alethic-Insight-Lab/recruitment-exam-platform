@@ -2,5 +2,4 @@ __pycache__/
 *.pyc
 .pytest_cache/
 data/*
-!data/question_bank_v5.md
 tests/test.db

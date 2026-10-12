@@ -1,6 +1,10 @@
-"""题库 v5 解析并幂等导入 question 表。
+"""题库 md 解析并幂等导入 question 表。
 
-题库源文件 data/question_bank_v5.md 按领域分节，题目标题前缀决定
+注意：真实题库不随本仓分发，维护在 org 私有仓 question-bank 中（含逐题
+评审口径与解析校验）；本脚本只负责解析与导入，开发/测试可用
+server/tests/fixtures/question_bank_sample.md 合成夹具验证解析契约。
+
+题库源文件（如 question-bank 仓中的 data/question_bank_v5.md）按领域分节，题目标题前缀决定
 role/track/active（口径与 app/constants.py、面试备课卡契约一致）：
     正选→正选/track1/active=1    备选→备选/track1/active=1
     第三题/开放题→开放/track3/active=1
