@@ -65,6 +65,26 @@ WEAK_PASSWORDS = (
     "a123456", "root123",
 )
 
+def client_ip(request: Request) -> str:
+    """限流键用的真实客户端 IP。
+
+    lab 部署上公网流量全部经云端 nginx 转发，uvicorn 的对端恒为云端服务器，
+    直接按对端 IP 限流会把所有用户挤进同一额度；故优先取代理链最左的
+    X-Forwarded-For（云端 nginx 已按 $proxy_add_x_forwarded_for 正确续链）。
+    注意：这两个头只在反代之后可信；直连未受保护端口时可伪造，
+    伪造后果仅为限流键漂移，不构成越权。
+    """
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    cf_ip = request.headers.get("cf-connecting-ip", "").strip()
+    if cf_ip:
+        return cf_ip
+    return request.client.host if request.client else "unknown"
+
+
 LOGIN_FAIL_WINDOW_MIN = 10
 LOGIN_FAIL_LIMIT = 10
 LOGIN_LOCK_MIN = 10

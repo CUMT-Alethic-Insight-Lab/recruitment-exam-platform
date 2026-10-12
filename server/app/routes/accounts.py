@@ -120,5 +120,9 @@ def reset_password(student_id: str, request: Request):
         )
         # 重置即踢掉该账号的全部会话（重置通常因密码泄露/遗忘，旧会话一律作废）
         conn.execute("DELETE FROM login_session WHERE student_id = ?", (student_id,))
-        auth.write_audit(conn, sess["student_id"], "reset_password", student_id)
+        # 一并解除登录限流锁定：重置多发生在用户已多次试错被锁之后，
+        # 锁定按学号计，不随密码重置自动失效，得由管理员操作顺带清掉
+        auth.clear_login_failures(conn, student_id)
+        auth.write_audit(conn, sess["student_id"], "reset_password", student_id,
+                         "重置为初始密码并解除登录锁定")
     return {"ok": True}

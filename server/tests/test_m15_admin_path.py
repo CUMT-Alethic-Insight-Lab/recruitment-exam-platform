@@ -41,14 +41,13 @@ def test_pages_use_admin_public_path(client, monkeypatch):
     assert client.get("/login").text.count("'/admin/recruitment'") >= 2
     # 首页是全屏翻页 deck：无顶栏注入；末页 entry slide 不再放管理端入口按钮
     #（3d11c9b 起管理端走 /admin/recruitment 直达，页面不留公开入口），
-    # 仅保留报名/登录入口；机试安装包下载自 2026-09-23 起暂停（套件更新测试），
-    # 恢复下载时需同步改回本断言对应的线上链接
+    # 仅保留报名/登录入口 + 机试安装包下载入口（R2 分发，2026-09-30 恢复下载）
     home = client.get("/")
     assert home.status_code == 200
     assert 'class="slide s-entry"' in home.text
     assert "管理端入口" not in home.text
-    assert "机试包更新中 · 暂停下载" in home.text
-    assert "dl.alethicinsight.com" not in home.text
+    assert "机试包更新中 · 暂停下载" not in home.text
+    assert "https://dl.alethicinsight.com/AlethicInsight-ExamKit-2026-setup.exe" in home.text
     assert "__PREFIX__/admin" not in home.text
     assert ADMIN_PATH_PLACEHOLDER not in home.text
     # 磁盘文件保持占位符不变（顶栏模板）；index.html 不再内嵌管理端入口占位符

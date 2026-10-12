@@ -112,6 +112,33 @@ def test_compat_login_shares_rate_limit(client, cid):
     assert res.status_code == 429
 
 
+def test_login_rate_limit_is_per_account(client, cid):
+    """限流按学号隔离：A 被锁不影响同来源下 B 的正常取盐与登录。"""
+    locked, other = "08264904", "08264905"
+    _register(client, cid, locked, "被锁考生")
+    _register(client, cid, other, "旁观考生")
+    for _ in range(auth.LOGIN_FAIL_LIMIT):
+        assert _wrong_login(client, locked).status_code == 401
+    assert client.get("/api/auth/salt",
+                      params={"student_id": locked}).status_code == 429
+    assert _unified_login(client, other).status_code == 200
+
+
+def test_reset_password_unlocks_login_rate(client, cid, admin_headers):
+    """管理员重置密码时一并解除该学号的登录锁定，重置后即可用初始密码登录。"""
+    student = "08264906"
+    _register(client, cid, student, "锁定重置")
+    for _ in range(auth.LOGIN_FAIL_LIMIT):
+        assert _wrong_login(client, student).status_code == 401
+    assert client.get("/api/auth/salt",
+                      params={"student_id": student}).status_code == 429
+
+    res = client.post(f"/api/admin/accounts/{student}/reset_password",
+                      headers=admin_headers)
+    assert res.status_code == 200, res.text
+    assert _unified_login(client, student).status_code == 200
+
+
 # ---------- 改密/重置踢旧会话 ----------
 
 

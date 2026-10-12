@@ -124,9 +124,9 @@ def _detect_image_ext(data: bytes) -> str | None:
 def issue_captcha(request: Request):
     """签发图形验证码（M16）：JSON {id, image}，image 为 PNG data URI。
 
-    开关关闭时照常签发（前端展示不变），仅后端校验被跳过。按 IP 限流。
+    开关关闭时照常签发（前端展示不变），仅后端校验被跳过。按真实客户端 IP 限流。
     """
-    ip = request.client.host if request.client else "unknown"
+    ip = auth.client_ip(request)
     with db.connection() as conn:
         captcha.check_issue_rate(conn, ip)
     captcha_id, png = captcha.new_captcha()

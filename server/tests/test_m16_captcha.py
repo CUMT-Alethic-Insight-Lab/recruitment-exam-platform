@@ -174,3 +174,22 @@ def test_issue_rate_limit(client, monkeypatch):
     # 清理：不污染同 IP 的后续用例与一小时内重跑
     with db.connection() as conn:
         captcha_mod.clear_issue_rate(conn, "testclient")
+
+
+def test_issue_rate_keyed_by_forwarded_ip(client, monkeypatch):
+    """签发限流按真实客户端 IP（XFF 最左）：反代后各用户额度互不干扰。"""
+    monkeypatch.setattr(captcha_mod, "ISSUE_LIMIT_PER_HOUR", 2)
+    with db.connection() as conn:
+        captcha_mod.clear_issue_rate(conn, "10.0.0.1")
+        captcha_mod.clear_issue_rate(conn, "10.0.0.2")
+    h1 = {"X-Forwarded-For": "10.0.0.1, 127.0.0.1"}
+    h2 = {"X-Forwarded-For": "10.0.0.2"}
+    assert client.get("/api/captcha", headers=h1).status_code == 200
+    assert client.get("/api/captcha", headers=h1).status_code == 200
+    assert client.get("/api/captcha", headers=h1).status_code == 429
+    # 一个 IP 被限不影响其他 IP
+    assert client.get("/api/captcha", headers=h2).status_code == 200
+    # 清理：不污染同键的后续用例与一小时内重跑
+    with db.connection() as conn:
+        captcha_mod.clear_issue_rate(conn, "10.0.0.1")
+        captcha_mod.clear_issue_rate(conn, "10.0.0.2")
