@@ -2,9 +2,9 @@
 """招新考试系统安装器构建脚本（维护机用，维护机可联网，目标机全程离线）。
 
 流程：
-  1. 校验 payload_cache/ 五个离线包在位且 SHA256 与 components_spec.json 一致；
+  1. 校验 payload_cache/ 全部离线包在位且 SHA256 与 components_spec.json 一致；
   2. 组装 payload/ 目录（payload/kit/ ← exam_kit 根目录 kit 文件 +
-     payload/ ← 五个离线包原样 + components_spec.json）；
+     payload/ ← 全部离线包原样 + components_spec.json）；
   3. 检查 PyInstaller（缺失时自动 pip install）；
   4. 在本目录执行 pyinstaller installer.spec --noconfirm；
   5. 构建后自检：产物 exe 存在并记录大小。
@@ -57,6 +57,11 @@ DOWNLOAD_HINTS = {
     "kimi-code-0.40.1-offline.zip":
         "（非下载件）构建机执行：npm install --prefix <tmp> @moonshot-ai/kimi-code@0.40.1 "
         "后对整个 node_modules/ 打 zip，重制步骤见 installer/COMPONENTS.md §5",
+    "tsnet-socks.zip":
+        "（非下载件）仓库内 go build 产出：cd exam_kit/tsnet-socks && "
+        "CGO_ENABLED=0 go build -ldflags=\"-s -w\" -o tsnet-socks.exe . "
+        "（源码 exam_kit/tsnet-socks/main.go + go.mod），再把 tsnet-socks.exe "
+        "单文件打成 zip 根层平铺包，详见 installer/COMPONENTS.md §7",
 }
 
 

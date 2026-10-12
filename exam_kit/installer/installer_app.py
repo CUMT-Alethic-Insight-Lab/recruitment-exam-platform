@@ -502,6 +502,9 @@ class Engine:
                 Step("git", "安装 Git",
                      "正在安装 Git（程序员常用的代码管理工具，送你的）…",
                      lambda: self.step_component("git")),
+                Step("tailscale", "安装 Tailscale 组网工具",
+                     "正在安装 Tailscale（组网工具，交卷时考试机凭它直连社团服务器）…",
+                     lambda: self.step_component("tailscale")),
                 Step("agent", "安装 AI 作答工具",
                      "正在安装你选择的 AI 作答工具（%s）…"
                      % AGENT_LABELS[self.agent], self.step_agent_tool),

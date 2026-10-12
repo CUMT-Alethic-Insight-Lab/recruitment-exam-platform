@@ -4,6 +4,7 @@
 一个 blob 引用，断言清洗规则与输出统计。"""
 
 import json
+import re
 import tempfile
 import unittest
 import zipfile
@@ -154,10 +155,12 @@ class CleanerTest(unittest.TestCase):
         return [r for r in self.records if r.get("agent") == agent]
 
     def test_return_shape_and_files(self):
-        self.assertEqual(set(self.result), {"cleaned_jsonl", "cleaned_md", "stats"})
-        for key in ("cleaned_jsonl", "cleaned_md"):
+        self.assertEqual(set(self.result),
+                         {"cleaned_jsonl", "cleaned_md", "cleaned_html", "stats"})
+        for key in ("cleaned_jsonl", "cleaned_md", "cleaned_html"):
             self.assertTrue(Path(self.result[key]).exists(), key)
         self.assertEqual(self.result["cleaned_jsonl"], self.out_dir / "cleaned.jsonl")
+        self.assertEqual(self.result["cleaned_html"], self.out_dir / "cleaned.html")
 
     def test_output_has_no_think_content(self):
         raw = (self.out_dir / "cleaned.jsonl").read_text(encoding="utf-8")
@@ -231,8 +234,8 @@ class CleanerTest(unittest.TestCase):
         main = self._by_agent("main")
         self.assertTrue(all(r["agent"] == "main" for r in main))
         # md 里 subagent 独立小节，标题来自 main 中 Agent 调用的 description
-        self.assertIn("## main", self.md)
-        self.assertIn("## agent-0 — 子代理任务A", self.md)
+        self.assertIn("## 🧩 代理：main", self.md)
+        self.assertIn("## 🧩 代理：agent-0 — 子代理任务A", self.md)
 
     def test_md_header_stats(self):
         stats = self.result["stats"]
@@ -243,10 +246,13 @@ class CleanerTest(unittest.TestCase):
         self.assertEqual(stats["task"], 1)
         self.assertEqual(stats["todo"], 1)
         self.assertEqual(stats["compaction"], 1)
-        for line in (f"- user 条数：{stats['user']}",
-                     f"- assistant 段数：{stats['assistant']}",
-                     f"- tool 调用数：{stats['tool']}"):
+        for line in (f"👤 用户 {stats['user']} 条",
+                     f"🤖 助手 {stats['assistant']} 段",
+                     f"🔧 工具 {stats['tool']} 次"):
             self.assertIn(line, self.md)
+        self.assertIn("- 会话来源：kimi 导出 zip", self.md)
+        self.assertIn("- 清洗时间：", self.md)
+        self.assertIn("轮次统计", self.md)
         self.assertIn("时间范围：", self.md)
         self.assertIn(cleaner._ms_to_iso(T0 + 10), self.md)  # ISO 时间范围
         self.assertIn(f"- 会话创建：{cleaner._ms_to_iso(T0)}", self.md)
@@ -280,6 +286,154 @@ class CleanerTest(unittest.TestCase):
             # 其余规则仍默认丢弃
             self.assertEqual([r for r in recs if r.get("k") == "user"
                               and "<system-reminder>" in r.get("text", "")], [])
+
+    def test_md_turn_sections(self):
+        self.assertRegex(self.md, r"## 👤 用户（\d{2}:\d{2}:\d{2}）")
+        self.assertRegex(self.md, r"## 🤖 助手（\d{2}:\d{2}:\d{2}）")
+        for name in ("Read", "Bash", "Grep", "Agent"):
+            self.assertRegex(self.md, rf"## 🔧 工具：{name}（\d{{2}}:\d{{2}}:\d{{2}}）")
+        # Bash 出错 → 显式错误标记；输出内容不再渲染，只留字符数
+        self.assertIn("**❌ 错误**", self.md)
+        self.assertNotIn("boom", self.md)
+        self.assertNotIn("> line1", self.md)
+        self.assertIn("（输出 4 字符）", self.md)  # bash "boom"
+        self.assertIn("（输出 17 字符）", self.md)  # Read 输出长度
+        # 关键参数一行
+        self.assertIn("**参数**：`src/a.py`", self.md)
+        # 正文原样保留
+        self.assertIn("我先写个测试用例。", self.md)
+        self.assertIn("请实现 fizzbuzz", self.md)
+
+    def test_html_self_contained(self):
+        html_path = self.out_dir / "cleaned.html"
+        raw = html_path.read_bytes()
+        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"), "不应有 BOM")
+        text = raw.decode("utf-8")
+        self.assertIn("会话清洗预览", text)
+        self.assertIn("👤 用户", text)
+        self.assertIn("🤖 助手", text)
+        self.assertIn("🔧 Bash", text)
+        self.assertIn("❌ 错误", text)
+        self.assertIn("（输出 17 字符）", text)  # Read 输出长度
+        self.assertNotIn("<details>", text)  # 工具输出不再渲染
+        self.assertNotIn("boom", text)  # 出错工具的输出内容也不出现
+        self.assertIn('class="turn user"', text)
+        self.assertIn('class="turn assistant"', text)
+        self.assertIn('class="turn tool error"', text)
+        self.assertIn("轮次统计", text)
+        assert_html_self_contained(self, text)
+
+    def test_jsonl_structure_unchanged(self):
+        expected = {
+            "user": {"k", "time", "text", "agent"},
+            "assistant": {"k", "time", "text", "agent"},
+            "tool": {"k", "time", "name", "arg", "err", "out_len", "agent"},
+            "task": {"k", "time", "text", "agent"},
+            "todo": {"k", "time", "text", "agent"},
+            "compaction": {"k", "time", "text", "agent"},
+            "raw": {"k", "time", "type", "agent"},
+        }
+        for rec in self.records:
+            for key in rec:
+                self.assertFalse(key.startswith("_"),
+                                 f"内部字段泄漏进 jsonl：{rec}")
+            want = expected[rec["k"]] | ({"think"} if rec.get("think") else set())
+            self.assertEqual(set(rec), want, rec)
+        # 抽样比对关键字段与旧版语义一致
+        read = next(r for r in self.records
+                    if r["k"] == "tool" and r.get("name") == "Read"
+                    and r["agent"] == "main")
+        self.assertEqual(
+            (read["arg"], read["out_len"], read["err"], read["time"]),
+            ("src/a.py", len(READ_OUTPUT), False, T0 + 100))
+
+    def test_kimi_model_tracking_and_dividers(self):
+        # llm.request 的 model 附到其后的 assistant 记录；html 仅在首现/切换
+        # 时插模型分隔行（同模型连续两段不重复）。
+        wire = "\n".join([
+            _line(type="metadata", created_at=T0),
+            _line(type="llm.request", model="k3-256k",
+                  modelAlias="kimi-code/k3-256k", time=T0 + 1),
+            _loop({"type": "content.part",
+                   "part": {"type": "text", "text": "第一句"}}),
+            _loop({"type": "content.part",
+                   "part": {"type": "text", "text": "同模型第二句"}}, t=T0 + 2),
+            _line(type="llm.request", model="k3",
+                  modelAlias="kimi-code/k3", time=T0 + 3),
+            _loop({"type": "content.part",
+                   "part": {"type": "text", "text": "切换后"}}, t=T0 + 4),
+        ]) + "\n"
+        with tempfile.TemporaryDirectory() as d:
+            zp = Path(d) / "s.zip"
+            with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+                z.writestr("agents/main/wire.jsonl", wire)
+            res = cleaner.clean_export(zp, Path(d) / "out")
+            recs = [json.loads(l) for l in
+                    Path(res["cleaned_jsonl"]).read_text(encoding="utf-8")
+                    .splitlines()]
+            assistants = [r for r in recs if r["k"] == "assistant"]
+            self.assertEqual([a.get("model") for a in assistants],
+                             ["k3-256k", "k3-256k", "k3"])
+            page = Path(res["cleaned_html"]).read_text(encoding="utf-8")
+            self.assertIn("── 模型：k3-256k ──", page)
+            self.assertIn("── 模型：k3 ──", page)
+            self.assertEqual(page.count('class="model-div"'), 2)
+
+    def test_kimi_search_keyword(self):
+        # kimi 侧搜索工具：关键词完整保留在参数行，输出内容不渲染
+        wire = "\n".join([
+            _line(type="metadata", created_at=T0),
+            _loop({"type": "tool.call", "toolCallId": "w1", "name": "WebSearch",
+                   "args": {"query": "kimi code 使用教程 评审"}}),
+            _loop({"type": "tool.result", "toolCallId": "w1",
+                   "result": {"output": "一堆搜索结果正文不应出现"}}),
+        ]) + "\n"
+        with tempfile.TemporaryDirectory() as d:
+            zp = Path(d) / "s.zip"
+            with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+                z.writestr("agents/main/wire.jsonl", wire)
+            res = cleaner.clean_export(zp, Path(d) / "out")
+            page = Path(res["cleaned_html"]).read_text(encoding="utf-8")
+            self.assertIn("🔍 搜索 · WebSearch", page)
+            self.assertIn("关键词：<code>kimi code 使用教程 评审</code>", page)
+            self.assertNotIn("一堆搜索结果正文", page)
+            md = Path(res["cleaned_md"]).read_text(encoding="utf-8")
+            self.assertIn("## 🔍 搜索：WebSearch（", md)
+            self.assertIn("**关键词**：`kimi code 使用教程 评审`", md)
+            self.assertNotIn("一堆搜索结果正文", md)
+            # jsonl 契约：_q/_out 均不落盘
+            recs = [json.loads(l) for l in Path(res["cleaned_jsonl"])
+                    .read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(recs), 1)
+            self.assertEqual(set(recs[0]),
+                             {"k", "time", "name", "arg", "err", "out_len",
+                              "agent"})
+
+    def test_tool_result_not_retained(self):
+        # 大工具输出只留派生字段（err/out_len/image），原文不进记录（M19 内存防线）
+        big = "x" * 1_000_000
+        wire = "\n".join([
+            _line(type="metadata", created_at=T0),
+            _loop({"type": "tool.call", "toolCallId": "b1", "name": "Read",
+                   "args": {"path": "a.txt"}}),
+            _loop({"type": "tool.result", "toolCallId": "b1",
+                   "result": {"output": big}}),
+            _loop({"type": "tool.call", "toolCallId": "b2", "name": "Agent",
+                   "args": {"description": "子任务甲"}}),
+            _loop({"type": "tool.result", "toolCallId": "b2",
+                   "result": {"output": "agent_id: agent-7\n..."}}),
+        ]) + "\n"
+        records, _ = cleaner.clean_wire(wire.splitlines())
+        tools = [r for r in records if r["k"] == "tool"]
+        self.assertEqual(len(tools), 2)
+        self.assertEqual(tools[0]["out_len"], 1_000_000)
+        self.assertFalse(tools[0]["err"])
+        for t in tools:
+            self.assertNotIn("_out", t)
+        # Agent 标题关联走派生的 agent_id
+        titles = {}
+        cleaner.clean_wire(wire.splitlines(), agent_titles=titles)
+        self.assertEqual(titles.get("agent-7"), "子任务甲")
 
 
 class OpenCodeCleanerTest(unittest.TestCase):
@@ -366,9 +520,12 @@ class OpenCodeCleanerTest(unittest.TestCase):
         self.assertEqual(stats["todo"], 1)
         self.assertEqual(stats["agents"], 1)
         self.assertEqual(stats["created_at"], cleaner._ms_to_iso(T0))
-        self.assertIn("## main", self.md)
+        self.assertIn("## 👤 用户（", self.md)
+        self.assertIn("## 🤖 助手（", self.md)
+        self.assertIn("## 🔧 工具：", self.md)
         self.assertIn("请开发 XX 功能", self.md)
-        self.assertIn("- user 条数：2", self.md)
+        self.assertIn("👤 用户 2 条", self.md)
+        self.assertIn("- 会话来源：opencode 会话 JSON", self.md)
 
     def test_clean_session_dispatch(self):
         with tempfile.TemporaryDirectory() as d:
@@ -386,6 +543,295 @@ class OpenCodeCleanerTest(unittest.TestCase):
             cleaner.load_opencode_session(
                 self.json_path.parent / "not_session.json")
 
+    def test_md_tool_error_and_empty_output(self):
+        # bash 出错 → 显式错误标记；输出一律不渲染（空输出也没有「（无输出）」）
+        self.assertRegex(self.md, r"## 🔧 工具：bash（\d{2}:\d{2}:\d{2}）")
+        self.assertIn("**❌ 错误**", self.md)
+        self.assertIn("（输出 0 字符）", self.md)
+        self.assertNotIn("（无输出）", self.md)
+        # todowrite → todo 摘要折成一行展示
+        self.assertIn("## 🔧 工具：todowrite（", self.md)
+
+    def test_html_self_contained(self):
+        text = (self.out_dir / "cleaned.html").read_text(encoding="utf-8")
+        self.assertIn("🔧 bash", text)
+        self.assertIn("❌ 错误", text)
+        self.assertIn("（输出 9 字符）", text)  # glob 输出 "a.py\nb.py" 的长度
+        self.assertNotIn("<details>", text)  # 工具输出不再渲染
+        self.assertNotIn("a.py\nb.py", text)
+        assert_html_self_contained(self, text)
+
+    def test_tool_output_not_rendered(self):
+        # 工具输出内容不进 md/html/复制文本，只留字符数
+        doc = _make_opencode_doc()
+        long_out = "\n".join(f"line-{i}" for i in range(1, 101))
+        doc["messages"][1]["parts"][3]["state"]["output"] = long_out  # glob
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.json"
+            p.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+            res = cleaner.clean_opencode(p, Path(d) / "out")
+            md = Path(res["cleaned_md"]).read_text(encoding="utf-8")
+            self.assertNotIn("line-1", md)
+            self.assertNotIn("结果截断", md)
+            page = Path(res["cleaned_html"]).read_text(encoding="utf-8")
+            self.assertNotIn("line-99", page)
+            self.assertNotIn("<details>", page)
+            self.assertIn(f"（输出 {len(long_out)} 字符）", page)
+            # 复制按钮内嵌的纯文本同样不含输出内容
+            m = re.search(r'var text=(".*?");\nvar btn', page, re.S)
+            self.assertIsNotNone(m)
+            self.assertNotIn("line-1", json.loads(m.group(1)))
+            # 但 out_len / jsonl 契约不受影响
+            recs = [json.loads(l) for l in Path(res["cleaned_jsonl"])
+                    .read_text(encoding="utf-8").splitlines()]
+            glob = next(r for r in recs
+                        if r["k"] == "tool" and r["name"] == "glob")
+            self.assertEqual(glob["out_len"], len(long_out))
+
+    def test_html_escapes_injection(self):
+        doc = _make_opencode_doc()
+        doc["messages"][0]["parts"][0]["text"] = '<script>alert("x")</script>'
+        doc["messages"][1]["parts"][3]["state"]["output"] = \
+            '<img src=x onerror=alert(1)>'
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.json"
+            p.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+            res = cleaner.clean_opencode(p, Path(d) / "out")
+            page = Path(res["cleaned_html"]).read_text(encoding="utf-8")
+            self.assertNotIn('<script>alert("x")</script>', page)
+            self.assertNotIn("<img src=x", page)
+            self.assertIn("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;", page)
+            # 工具输出整体不再渲染，其中的注入内容也随之消失
+            self.assertNotIn("onerror=alert", page)
+            # md 是纯文本产物，正文原样保留
+            md = Path(res["cleaned_md"]).read_text(encoding="utf-8")
+            self.assertIn('<script>alert("x")</script>', md)
+            self.assertNotIn("<img src=x", md)
+
+    def test_jsonl_structure_unchanged(self):
+        for rec in self.records:
+            for key in rec:
+                self.assertFalse(key.startswith("_"),
+                                 f"内部字段泄漏进 jsonl：{rec}")
+        tool = next(r for r in self.records if r["k"] == "tool")
+        self.assertEqual(set(tool),
+                         {"k", "time", "name", "arg", "err", "out_len", "agent"})
+        user = next(r for r in self.records if r["k"] == "user")
+        self.assertEqual(set(user), {"k", "time", "text", "agent"})
+
+    def test_jsonl_assistant_model_field(self):
+        # modelID → assistant 记录的可选 model 键；其他记录不带
+        assistants = [r for r in self.records if r["k"] == "assistant"]
+        self.assertEqual([a.get("model") for a in assistants],
+                         ["big-pickle", "kimi-k3"])
+        for r in self.records:
+            if r["k"] != "assistant":
+                self.assertNotIn("model", r, r)
+
+    def test_html_model_dividers(self):
+        # 首现 + 切换各一次，共两条分隔行（msg_2 / msg_3 模型不同）
+        text = (self.out_dir / "cleaned.html").read_text(encoding="utf-8")
+        self.assertIn("── 模型：big-pickle ──", text)
+        self.assertIn("── 模型：kimi-k3 ──", text)
+        self.assertEqual(text.count('class="model-div"'), 2)
+
+    def test_html_copy_button(self):
+        text = (self.out_dir / "cleaned.html").read_text(encoding="utf-8")
+        self.assertIn('id="copyAll"', text)
+        self.assertIn("📋 复制全部内容", text)
+        self.assertIn("已复制", text)
+        self.assertIn("navigator.clipboard", text)
+
+    def test_html_autowrap_css(self):
+        text = (self.out_dir / "cleaned.html").read_text(encoding="utf-8")
+        self.assertIn("white-space: pre-wrap", text)
+        self.assertIn("overflow-wrap: anywhere", text)
+        self.assertIn("word-break: break-word", text)
+
+    def test_html_tool_arg_no_json_braces(self):
+        # 未知工具的 JSON 参数在 html 里摊平为纯文本，不外露括号
+        rec = {"k": "tool", "time": T0, "name": "mcp_tool",
+               "arg": '{"role": "admin", "count": 3}',
+               "err": False, "out_len": 0, "_out": ""}
+        frag = cleaner._turn_html(rec)
+        self.assertNotIn('{"role"', frag)
+        self.assertIn("role: admin", frag)
+        self.assertIn("count: 3", frag)
+        # 被 160 字截断的 JSON（无法 parse）也去括号
+        rec2 = dict(rec, arg='{"role": "admin", "detail": "很长…')
+        frag2 = cleaner._turn_html(rec2)
+        self.assertNotIn("{", frag2)
+        self.assertIn("role：admin", frag2)
+        # shell 命令里合法的花括号不受影响
+        rec3 = dict(rec, name="bash",
+                    arg='ForEach-Object { $_ -Raw }')
+        frag3 = cleaner._turn_html(rec3)
+        self.assertIn("{ $_ -Raw }", frag3)
+
+    def test_html_markdown_rendering(self):
+        doc = _make_opencode_doc()
+        doc["messages"][0]["parts"][0]["text"] = (
+            "# 计划\n\n**重点** 先做 `A`，再看 *B*。\n\n"
+            "```py\nprint(1)\n```\n\n"
+            "- 甲\n- 乙\n\n1. 一\n2. 二\n\n> 注意点\n\n---\n\n"
+            "见[文档](https://example.com/x)。")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.json"
+            p.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+            res = cleaner.clean_opencode(p, Path(d) / "out")
+            page = Path(res["cleaned_html"]).read_text(encoding="utf-8")
+        self.assertIn("<h2>计划</h2>", page)
+        self.assertIn("<strong>重点</strong>", page)
+        self.assertIn("<code>A</code>", page)
+        self.assertIn("<em>B</em>", page)
+        self.assertIn('<pre class="code"><code>print(1)</code></pre>', page)
+        self.assertIn("<ul><li>甲</li><li>乙</li></ul>", page)
+        self.assertIn("<ol><li>一</li><li>二</li></ol>", page)
+        self.assertIn("<blockquote>注意点</blockquote>", page)
+        self.assertIn("<hr>", page)
+        self.assertIn('<a href="https://example.com/x" target="_blank" '
+                      'rel="noopener">文档</a>', page)
+
+    def test_html_markdown_table(self):
+        doc = _make_opencode_doc()
+        doc["messages"][0]["parts"][0]["text"] = (
+            "前言段落\n\n"
+            "| 名称 | 数值 | 备注 |\n"
+            "| :--- | ---: | :---: |\n"
+            "| 甲 | 1 | 低 |\n"
+            "| 乙<b> | 2 | 高 |\n\n"
+            "后言段落")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.json"
+            p.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+            res = cleaner.clean_opencode(p, Path(d) / "out")
+            page = Path(res["cleaned_html"]).read_text(encoding="utf-8")
+        self.assertIn("<table><thead><tr>", page)
+        self.assertIn('<th style="text-align:left">名称</th>', page)
+        self.assertIn('<th style="text-align:right">数值</th>', page)
+        self.assertIn('<th style="text-align:center">备注</th>', page)
+        self.assertIn('<td style="text-align:left">甲</td>', page)
+        # 单元格内容全量转义
+        self.assertIn("乙&lt;b&gt;", page)
+        # 表格前后段落不粘连
+        self.assertIn("<p>前言段落</p>", page)
+        self.assertIn("<p>后言段落</p>", page)
+
+    def test_html_markdown_table_not_breaking_paragraph(self):
+        # 与 GFM 一致：表格不能打断段落（前无空行时按普通文本处理）
+        text = "前言\n| a | b |\n| --- | --- |\n| 1 | 2 |"
+        page = cleaner.render_markdown(text)
+        self.assertNotIn("<table>", page)
+
+    def test_search_keyword_rendered(self):
+        # 搜索类工具：query/keywords 字段都识别，关键词完整可见，输出不渲染
+        doc = _make_opencode_doc()
+        doc["messages"][1]["parts"] += [
+            {"id": "prt_s1", "sessionID": "ses_x", "messageID": "msg_2",
+             "type": "tool", "callID": "c9", "tool": "web_search",
+             "state": {"status": "completed",
+                       "input": {"query": "Alethic Insight 招新 机试流程"},
+                       "output": "搜索结果正文不应出现",
+                       "time": {"start": T0 + 25}}},
+            {"id": "prt_s2", "sessionID": "ses_x", "messageID": "msg_2",
+             "type": "tool", "callID": "c10", "tool": "call_data_source_tool",
+             "state": {"status": "completed",
+                       "input": {"keywords": "GDP 增速"},
+                       "output": "数据接口返回不应出现",
+                       "time": {"start": T0 + 26}}},
+            {"id": "prt_s3", "sessionID": "ses_x", "messageID": "msg_2",
+             "type": "tool", "callID": "c11", "tool": "fetch_url",
+             "state": {"status": "completed",
+                       "input": {"url": "https://example.com/a"},
+                       "output": "网页正文不应出现",
+                       "time": {"start": T0 + 27}}},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.json"
+            p.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+            res = cleaner.clean_opencode(p, Path(d) / "out")
+            page = Path(res["cleaned_html"]).read_text(encoding="utf-8")
+            self.assertIn("🔍 搜索 · web_search", page)
+            self.assertIn(
+                "关键词：<code>Alethic Insight 招新 机试流程</code>", page)
+            self.assertIn("🔍 搜索 · call_data_source_tool", page)
+            self.assertIn("关键词：<code>GDP 增速</code>", page)
+            # 无 query 字段的搜索类工具回退普通参数一行（JSON 摊平）
+            self.assertIn("🔍 搜索 · fetch_url", page)
+            self.assertIn("参数：<code>url: https://example.com/a</code>", page)
+            for leaked in ("搜索结果正文不应出现", "数据接口返回不应出现",
+                           "网页正文不应出现"):
+                self.assertNotIn(leaked, page)
+            md = Path(res["cleaned_md"]).read_text(encoding="utf-8")
+            self.assertIn("## 🔍 搜索：web_search（", md)
+            self.assertIn("**关键词**：`Alethic Insight 招新 机试流程`", md)
+            self.assertIn("**关键词**：`GDP 增速`", md)
+            self.assertNotIn("搜索结果正文不应出现", md)
+            # jsonl 不落 _q
+            raw = Path(res["cleaned_jsonl"]).read_text(encoding="utf-8")
+            self.assertNotIn('"_q"', raw)
+
+
+class SearchDetectTest(unittest.TestCase):
+    """搜索类工具识别与关键词抽取的纯函数测试。"""
+
+    def test_is_search_tool(self):
+        yes = ("WebSearch", "web_search", "websearch", "google_search",
+               "brave_search", "tavily", "tavily_search", "search",
+               "search_web", "fetch_url", "FetchURL", "webbridge.navigate",
+               "call_data_source_tool", "get_data_source_desc")
+        no = ("Bash", "Read", "Write", "Edit", "Grep", "Glob",
+              "todowrite", "question", "Agent")
+        for name in yes:
+            self.assertTrue(cleaner._is_search_tool(name), name)
+        for name in no:
+            self.assertFalse(cleaner._is_search_tool(name), name)
+
+    def test_search_query_fields(self):
+        self.assertEqual(cleaner._search_query({"query": " a "}), "a")
+        self.assertEqual(cleaner._search_query({"keyword": "k"}), "k")
+        self.assertEqual(cleaner._search_query({"keywords": "ks"}), "ks")
+        self.assertEqual(cleaner._search_query({"q": "qq"}), "qq")
+        self.assertEqual(cleaner._search_query({"search_terms": "st"}), "st")
+        # 字段优先级：query 在 q 之前
+        self.assertEqual(cleaner._search_query({"q": "x", "query": "y"}), "y")
+        self.assertIsNone(cleaner._search_query({"url": "https://x"}))
+        self.assertIsNone(cleaner._search_query({"query": "  "}))
+        self.assertIsNone(cleaner._search_query({"query": 42}))
+        self.assertIsNone(cleaner._search_query("not-a-dict"))
+
+
+class MarkdownRendererTest(unittest.TestCase):
+    """render_markdown 子集渲染器纯函数测试。"""
+
+    def test_blocks_and_inline(self):
+        h = cleaner.render_markdown(
+            "## 标题\n\n**粗** *斜* `码`\n\n```\nx<y\n```\n\n"
+            "- a\n- b\n\n3. c\n\n> q\n\n***\n\n[t](https://e.com)")
+        self.assertIn("<h3>标题</h3>", h)
+        self.assertIn("<strong>粗</strong>", h)
+        self.assertIn("<em>斜</em>", h)
+        self.assertIn("<code>码</code>", h)
+        self.assertIn('<pre class="code"><code>x&lt;y</code></pre>', h)
+        self.assertIn("<ul><li>a</li><li>b</li></ul>", h)
+        self.assertIn("<ol><li>c</li></ol>", h)
+        self.assertIn("<blockquote>q</blockquote>", h)
+        self.assertIn("<hr>", h)
+        self.assertIn('<a href="https://e.com" target="_blank" '
+                      'rel="noopener">t</a>', h)
+
+    def test_escape_and_link_safety(self):
+        h = cleaner.render_markdown('<b>bold</b> [x](javascript:alert(1))')
+        self.assertIn("&lt;b&gt;bold&lt;/b&gt;", h)
+        self.assertNotIn("<b>bold</b>", h)
+        self.assertNotIn('<a href="javascript:', h)  # 非 http(s) 不渲染成链接
+        # `__` 不按加粗处理（避免 __init__ 之类技术文本被误渲染）
+        self.assertIn("__init__", cleaner.render_markdown("见 __init__.py"))
+
+    def test_soft_linebreaks_become_br(self):
+        h = cleaner.render_markdown("第一行\n第二行")
+        self.assertIn("第一行<br>第二行", h)
+
 
 def self_zip_path():
     """复用 kimi mini zip（模块上方 _make_zip）做 detect_source 的另一分支。"""
@@ -394,6 +840,15 @@ def self_zip_path():
     if not p.exists():
         _make_zip(p)
     return p
+
+
+def assert_html_self_contained(case, text):
+    """html 产物自包含断言：内联样式/内联脚本（复制按钮），无任何外部资源引用。"""
+    case.assertIn("<style>", text)
+    case.assertIn("</html>", text)
+    for bad in ("<script src", "<link", "<img", "<iframe", "<video",
+                "@import", "url(", " src="):
+        case.assertNotIn(bad, text, bad)
 
 
 def _make_opencode_doc():
@@ -412,6 +867,7 @@ def _make_opencode_doc():
              "parts": [part("p1", "msg_1", "text", text="请开发 XX 功能")]},
             {"info": {"id": "msg_2", "sessionID": "ses_x", "role": "assistant",
                       "time": {"created": T0 + 20, "completed": T0 + 30},
+                      "modelID": "big-pickle", "providerID": "opencode",
                       "finish": "tool-calls"},
              "parts": [
                  part("p2", "msg_2", "step-start", snapshot="abc"),
@@ -430,6 +886,7 @@ def _make_opencode_doc():
              ]},
             {"info": {"id": "msg_3", "sessionID": "ses_x", "role": "assistant",
                       "time": {"created": T0 + 40, "completed": T0 + 60},
+                      "modelID": "kimi-k3", "providerID": "moonshot",
                       "finish": "stop"},
              "parts": [
                  part("p7", "msg_3", "tool", callID="c2", tool="bash",

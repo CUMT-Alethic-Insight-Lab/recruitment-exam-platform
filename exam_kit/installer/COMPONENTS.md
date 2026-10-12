@@ -4,7 +4,8 @@
 `exam_kit/installer/payload_cache/`（该目录不入库，见 exam_kit/.gitignore），
 全部哈希为自算 SHA256，其中 Node.js / opencode 已与官方发布哈希交叉比对一致。
 
-payload_cache 总体积约 319 MB（6 个文件），单 EXE 体积相应上浮（见 §6）。
+payload_cache 总体积 337,369,009 bytes ≈ 337 MB（7 个文件，2026-09-30 追加 tsnet-socks.zip），
+单 EXE 体积相应上浮（最新实测见 installer_README.md「打包」一节）。
 
 ---
 
@@ -185,7 +186,52 @@ Web UI（官方文档 opencode.ai/docs/web/ + /docs/cli/）：
   终端 → 设置 → 启动 → 默认配置文件 里选择。Win10 / 无终端机器写 fragment
   失败属常态，该步骤任何异常只记日志不中断安装。
 
-## 7. 各组件 PATH 汇总（安装器 setx 追加用户 PATH）
+## 7. Tailscale 组网通道：tsnet-socks（2026-09-30 追加，仓库自建件）
+
+| 项 | 值 |
+|---|---|
+| 性质 | **非官网下载件**——仓库内 `go build` 产出。源码：`exam_kit/tsnet-socks/main.go` + `go.mod`（模块 `alethic/tsnet-socks`），依赖 `tailscale.com v1.102.4` 的 **tsnet 用户态协议栈** + `github.com/armon/go-socks5`，Go 1.26.6 |
+| 构建命令 | `cd exam_kit/tsnet-socks && CGO_ENABLED=0 go build -ldflags="-s -w" -o tsnet-socks.exe .` |
+| 文件名 | tsnet-socks.zip（zip 根层**恰好一个文件** `tsnet-socks.exe`，无子目录） |
+| 大小 | 8,656,141 bytes（zip）；zip 内 exe 22,582,272 bytes |
+| SHA256 | zip：`8ffb36476db3814cf781ad2121f951eb9dcd52789460d287172357bb23053442`；zip 内 exe：`66704076f24f7245e8b07535ded8d6fc9a6b60c6858e4ed2942d5328665fd805`（均自算） |
+| 验证方式 | zip 内 exe 与 `go build` 原件逐字节一致（SHA256 比对）✅；zip `testzip` CRC 自检通过 ✅；裸跑 `tsnet-socks.exe` → 输出 `FAIL control-url and auth-key are required`、rc=2（设计行为：无入网参数即拒跑，不触网）✅ |
+
+为什么不用 stock tailscaled（方案变更记录）：
+
+- 初版方案是官方 MSI 解包取 `tailscaled.exe + tailscale.exe` 双 exe；后改为本仓库自建的
+  tsnet 单 exe 方案——stock tailscaled 在 Windows 上走命名管道控制面、要管理员/驱动
+  配合，坑多；tsnet 把整个 tailnet 节点嵌进单个 exe，**免管理员、免 TUN 驱动、
+  免命名管道**，考生机零系统侵入。
+- 组件 id 仍为 `tailscale`、目标目录仍为
+  `%LOCALAPPDATA%\Programs\AlethicTools\tailscale`——kit 侧 exam_server.py 以
+  `tailscale_dir` 约定找 exe，保持不变避免连锁改动。
+- 旧官方 MSI 下载/解包流程作废（`tailscale-setup-1.102.4-amd64.msi` 不再进安装包），
+  重制只需在仓库里重新 go build 再打 zip。
+
+重制步骤（即 build_installer.py DOWNLOAD_HINTS 的展开）：
+
+1. `cd exam_kit/tsnet-socks && CGO_ENABLED=0 go build -ldflags="-s -w" -o tsnet-socks.exe .`
+2. 把 `tsnet-socks.exe` 单文件平铺打进 zip 根层 → `payload_cache/tsnet-socks.zip`，
+   自算 SHA256 回填 components_spec.json（组件 `tailscale`）。
+
+部署与用途：
+
+- `zip_flat` 原样解压到 `%LOCALAPPDATA%\Programs\AlethicTools\tailscale`，
+  PATH 追加该目录（与其他 zip_flat 组件同约定）。
+- 运行契约（main.go）：`tsnet-socks -control-url <headscale> -auth-key <hskey> 
+  -hostname candidate-<学号> -state-dir ts_state -socks5 127.0.0.1:1055`；
+  入网成功 stdout 输出 `READY <tailnet-ip>`，随后以 SOCKS5 供 curl 走代理直连
+  实验室主机上传；节点 ephemeral（服务端 30min 无活动自动蒸发），
+  SIGINT/SIGTERM 优雅注销。
+- 用途不变：考生机凭短时 preauthkey 加入实验室 Headscale tailnet 直连上传
+  （服务端 HEADSCALE_API_KEY / LAB_TAILNET_IP 未配置时下发接口 503，
+  客户端回退 HTTPS 上传——P2P 是加速通道，不是唯一通道）。
+- 二进制无 `--version`/自检旗标（裸跑固定 rc=2），故本组件**不配 post_install_check**：
+  装完以 `verify_files` 落盘校验为准，`verify_cmds` 用 `where tsnet-socks`（走 PATH）
+  做探测；安装器不启动它、不入网——入网由考试流程按需进行。
+
+## 8. 各组件 PATH 汇总（安装器 setx 追加用户 PATH）
 
 ```
 %LOCALAPPDATA%\Programs\Python\Python312\Scripts\
@@ -195,20 +241,25 @@ Web UI（官方文档 opencode.ai/docs/web/ + /docs/cli/）：
 %LOCALAPPDATA%\Programs\AlethicTools\kimi\node_modules\.bin\
 %LOCALAPPDATA%\Programs\AlethicTools\opencode\   (放 opencode.exe 的目录)
 %LOCALAPPDATA%\Programs\AlethicTools\pwsh\       (放 pwsh.exe 的目录)
+%LOCALAPPDATA%\Programs\AlethicTools\tailscale\  (放 tsnet-socks.exe 的目录)
 ```
 
-## 8. 启动指令对照（启动考试系统.bat 用）
+## 9. 启动指令对照（启动考试系统.bat 用）
 
 | 工具 | 指令 | 端口 | 自动开浏览器 |
 |---|---|---|---|
 | Kimi Code | `kimi web` | 固定 58627 | 是（官方文档证实） |
 | opencode | `opencode web` | **随机端口，需 `--port` 固定** | 是 |
 
-## 9. 遗留不确定项
+## 10. 遗留不确定项
 
 - python.org 发布页（/downloads/release/python-31210/）本次抓取不到文件哈希表，
   Python 安装器哈希为自算（HTTPS 官方域下载），未做第三方交叉比对。
 - PortableGit SHA256 无官方哈希页可比对（git-for-windows release 不附 digest 文件），
   同为 HTTPS 官方 GitHub release 下载后自算。
+- tsnet-socks.zip 为仓库内 go build 后自打 zip，无官方哈希可比对（本来就不是下载件）；
+  已用 SHA256 比对证明 zip 内 exe 与 `go build` 原件逐字节一致（§7）。源码或 go.mod
+  变动后必须重 build、重打 zip、重填哈希——payload_cache 里的 zip 与源码可能不同步，
+  出货前按 §7 重制步骤重新构建一次最稳。
 - opencode 免费模型清单是限时活动，出货前建议再刷一次 opencode.ai/docs/zen/ 确认仍在。
 - 未在真实全新 Win10 上验证（无 VM），仅本机临时目录干净环境模拟。

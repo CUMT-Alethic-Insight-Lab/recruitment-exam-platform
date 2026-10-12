@@ -7,10 +7,8 @@
        payload/kit/      ← exam_kit/ 根目录的考试机 kit 文件
                            （exam_server.py / cleaner.py / config.json /
                             启动考试系统.bat / README.md）
-       payload/ 下的组件离线包 ← exam_kit/installer/payload_cache/ 的 5 个文件
-                           （python-3.12.10-amd64.exe / node-v24.20.0-win-x64.zip /
-                            PortableGit-*.7z.exe / opencode-windows-x64.zip /
-                            kimi-code-0.40.1-offline.zip）
+       payload/ 下的组件离线包 ← exam_kit/installer/payload_cache/ 的全部文件
+                           （清单以 components_spec.json 为准，当前 7 个）
   3. pyinstaller installer.spec --noconfirm
   4. 产物：dist/招新考试系统-安装程序.exe（onefile，约 250MB）
 
@@ -24,7 +22,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('payload', 'payload'),                 # kit + 5 个离线组件包
+        ('payload', 'payload'),                 # kit + 全部离线组件包
         ('components_spec.json', '.'),          # 组件事实数据（R1 回填）
     ],
     hiddenimports=[],

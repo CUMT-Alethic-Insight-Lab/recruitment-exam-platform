@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "updated": "2026-09-06",
-  "authority": "数值已按 R1 线 COMPONENTS.md（实测验证日期 2026-09-05）回填核对；SHA256 与 payload_cache/ 现有文件自算哈希一致。installer_app.py 只读本文件取参数，不硬编码任何版本号。",
+  "updated": "2026-09-30",
+  "authority": "数值已按 R1 线 COMPONENTS.md（实测验证日期 2026-09-05）回填核对；SHA256 与 payload_cache/ 现有文件自算哈希一致。installer_app.py 只读本文件取参数，不硬编码任何版本号。2026-09-30 追加 tailscale 组件（COMPONENTS.md §7，仓库内 go build 产出的 tsnet-socks.exe 单文件 zip，非官网下载件）。",
   "placeholders": {
     "说明": "所有曾标 TODO 的字段已按 COMPONENTS.md 回填；COMPONENTS.md 后续更新（如 opencode 版本刷新）时直接覆盖本文件对应字段即可。",
-    "opencode_free_models": "免费模型为 OpenCode Zen 限时 $0 型号，出货前建议再刷 opencode.ai/docs/zen/ 确认（COMPONENTS.md §8）"
+    "opencode_free_models": "免费模型为 OpenCode Zen 限时 $0 型号，出货前建议再刷 opencode.ai/docs/zen/ 确认（COMPONENTS.md §10）"
   },
   "tools_base": "%LOCALAPPDATA%\\Programs\\AlethicTools",
   "components": {
@@ -28,7 +28,7 @@
       ],
       "version_regex": "3\\.12",
       "path_append": [],
-      "notes": "Python 官方安装器自己写注册表/PATH（PrependPath=1），属常规系统软件行为，不受『考试系统不进注册表』承诺约束；安装器代理勿重复追加 Python 的 PATH（COMPONENTS.md §6）。参数经官方文档确认（docs.python.org/3.12/using/windows.html）。"
+      "notes": "Python 官方安装器自己写注册表/PATH（PrependPath=1），属常规系统软件行为，不受『考试系统不进注册表』承诺约束；安装器代理勿重复追加 Python 的 PATH（COMPONENTS.md §8）。参数经官方文档确认（docs.python.org/3.12/using/windows.html）。"
     },
     "node": {
       "label": "Node.js（便携版）",
@@ -146,6 +146,25 @@
         "--version"
       ],
       "notes": "zip 内为单个 opencode.exe（约 180MB），不依赖 Node.js（R1 在无 Node 的 PATH 下实测 --version=1.18.29）。仅当用户选择 opencode 时安装。注意：`opencode web` 默认随机端口，kit 的 opencode_web_cmd 如需固定端口应由 kit 侧传 --port（安装器不改 web 指令，保持 kit 默认）。"
+    },
+    "tailscale": {
+      "label": "Tailscale 组网通道（tsnet-socks）",
+      "kind": "zip_flat",
+      "file": "tsnet-socks.zip",
+      "sha256": "8ffb36476db3814cf781ad2121f951eb9dcd52789460d287172357bb23053442",
+      "size": 8656141,
+      "target_dir": "%LOCALAPPDATA%\\Programs\\AlethicTools\\tailscale",
+      "verify_files": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\tailscale\\tsnet-socks.exe"
+      ],
+      "verify_cmds": [
+        "where tsnet-socks"
+      ],
+      "version_regex": "",
+      "path_append": [
+        "%LOCALAPPDATA%\\Programs\\AlethicTools\\tailscale"
+      ],
+      "notes": "非官网下载件：仓库内 go build 产出（源码 exam_kit/tsnet-socks/main.go + go.mod，基于 tailscale.com v1.102.4 的 tsnet 用户态协议栈 + armon/go-socks5；构建命令：cd exam_kit/tsnet-socks && CGO_ENABLED=0 go build -ldflags=\"-s -w\" -o tsnet-socks.exe .），把单个 tsnet-socks.exe（22,582,272 bytes）打成 zip 根层平铺包。相比 stock tailscaled 双 exe 方案：免管理员、免 TUN 驱动、免命名管道，节点 ephemeral（服务端 30min 无活动自动蒸发），拉起后输出 READY <tailnet-ip> 并以 SOCKS5 127.0.0.1:1055 供 curl 走代理上传。组件 id 与 target_dir 保持 tailscale 不变（kit 侧 exam_server.py 以 tailscale_dir 约定找 exe）。二进制无 --version/自检旗标——裸跑固定输出 FAIL usage 行并以 rc=2 退出（设计如此，入网必须带 -control-url/-auth-key），故不配 post_install_check，只以 verify_files 落盘校验 + verify_cmds（where，走 PATH）探测。zip 哈希自算；zip 内 exe 与 go build 原件逐字节一致（SHA256 比对），裸跑实测输出 FAIL usage、rc=2。重制步骤见 COMPONENTS.md §7 与 build_installer.py DOWNLOAD_HINTS。"
     }
   },
   "install_order": [
@@ -153,6 +172,7 @@
     "python",
     "node",
     "git",
+    "tailscale",
     "agent"
   ],
   "agent_component": {

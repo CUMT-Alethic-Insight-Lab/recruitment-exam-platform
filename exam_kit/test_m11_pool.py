@@ -294,8 +294,8 @@ class TestOpenAgentWorkspaceEndpoint(_OpenWsServerBase):
 
 
 class TestPoolLogic(unittest.TestCase):
-    """node 执行 PAGE 内纯逻辑块：同域互斥/跨域共存、考生领域过滤、组内排序、
-    track3 校验（0 题 / 同域多题白话错误）。"""
+    """node 执行 PAGE 内纯逻辑块：题库过滤/排序、standard 校验、
+    M12 两步向导（选领域→选题/自由发挥）纯逻辑。"""
 
     @classmethod
     def setUpClass(cls):
@@ -304,29 +304,28 @@ class TestPoolLogic(unittest.TestCase):
         assert m, "PAGE 内缺少 __POOL_LOGIC__ 标记块"
         cls.logic = m.group(1)
 
-    def test_pool_same_domain_exclusive_cross_domain_ok(self):
+    def test_wizard_questions_for_domain_filters_and_sorts(self):
         if not shutil.which("node"):
             self.skipTest("node 不可用")
         js = "const POOL_MAX = 3;\n" + self.logic + """
 const assert = require("assert");
-const dom = {"llm1": "llm_arch", "llm2": "llm_arch", "mem1": "memory", "ag1": "agent"};
-// 同域互斥：勾新题自动取消同域旧题，跨域不受影响
-assert.deepStrictEqual(poolToggleIds(["llm1"], "llm2", "llm_arch", dom), ["llm2"]);
+const qs = [
+  {id: "a", domain: "llm_arch", track: "track3"},
+  {id: "b", domain: "llm_arch", track: "track1"},
+  {id: "c", domain: "memory",   track: "track2"},
+  {id: "d", domain: "infra",    track: "track1"},
+];
+// 只取所选领域，并按 理论→实操→自由发挥 排序
 assert.deepStrictEqual(
-  poolToggleIds(["llm1", "mem1"], "llm2", "llm_arch", dom), ["mem1", "llm2"]);
-// 跨域可共存
+  wizardQuestionsForDomain(qs, "llm_arch").map(q => q.id), ["b", "a"]);
 assert.deepStrictEqual(
-  poolToggleIds(["llm1"], "mem1", "memory", dom), ["llm1", "mem1"]);
-// 再点同一题取消自身
-assert.deepStrictEqual(poolToggleIds(["llm1", "mem1"], "llm1", "llm_arch", dom),
-                       ["mem1"]);
-// 已有 3 题时再加第 4 题（其它域）不再增加
-assert.deepStrictEqual(
-  poolToggleIds(["llm1", "mem1", "ag1"], "cv1", "cv_arch", dom),
-  ["llm1", "mem1", "ag1"]);
-console.log("POOL_TOGGLE_OK");
+  wizardQuestionsForDomain(qs, "memory").map(q => q.id), ["c"]);
+// 未选领域 / 无题领域都为空
+assert.deepStrictEqual(wizardQuestionsForDomain(qs, ""), []);
+assert.deepStrictEqual(wizardQuestionsForDomain(qs, "agent"), []);
+console.log("WIZARD_FILTER_OK");
 """
-        self._run_node(js, "POOL_TOGGLE_OK")
+        self._run_node(js, "WIZARD_FILTER_OK")
 
     def test_pool_filter_domains_and_sort_track(self):
         if not shutil.which("node"):
@@ -356,22 +355,22 @@ console.log("POOL_FILTER_OK");
 """
         self._run_node(js, "POOL_FILTER_OK")
 
-    def test_pool_track3_validation(self):
+    def test_wizard_validate(self):
         if not shutil.which("node"):
             self.skipTest("node 不可用")
         js = "const POOL_MAX = 3;\n" + self.logic + """
 const assert = require("assert");
-const dom = {"llm1": "llm_arch", "llm2": "llm_arch", "mem1": "memory"};
-assert.strictEqual(poolValidateTrack3([], dom), "请至少选择 1 道题");
-assert.strictEqual(poolValidateTrack3(["llm1", "llm2"], dom),
-                   "同一领域只能选择一道题作答");
-assert.strictEqual(poolValidateTrack3(["llm1", "mem1"], dom), "");
+// 两步向导校验：先选领域，再选题或自由发挥
+assert.strictEqual(wizardValidate("", ""), "请先选择领域");
+assert.strictEqual(wizardValidate("llm_arch", ""), "请选择一道题，或选择「自由发挥」");
+assert.strictEqual(wizardValidate("llm_arch", "q-1"), "");
+assert.strictEqual(wizardValidate("llm_arch", "__free__"), "");
 // 标准模式校验保持原样
 assert.strictEqual(poolValidateStandard([]), "请先勾选 1~3 道题");
 assert.strictEqual(poolValidateStandard(["llm1"]), "");
-console.log("POOL_VALIDATE_OK");
+console.log("WIZARD_VALIDATE_OK");
 """
-        self._run_node(js, "POOL_VALIDATE_OK")
+        self._run_node(js, "WIZARD_VALIDATE_OK")
 
     def _run_node(self, js, marker):
         with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
@@ -385,6 +384,166 @@ console.log("POOL_VALIDATE_OK");
             os.unlink(name)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(marker, r.stdout)
+
+
+def _extract_js_functions(page: str, *names: str) -> str:
+    """从 PAGE 里按名抽出函数定义源码（朴素花括号配对；所抽函数体内
+    字符串/注释不含 {}，失配时 assert 会直接炸出来）。"""
+    out = []
+    for name in names:
+        m = re.search(rf"(?:async\s+)?function\s+{name}\s*\(", page)
+        assert m, f"PAGE 中未找到函数 {name}"
+        brace = page.index("{", m.end() - 1)
+        depth, i = 0, brace
+        while True:
+            if page[i] == "{":
+                depth += 1
+            elif page[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        out.append(page[m.start():i + 1])
+    return "\n".join(out)
+
+
+class TestPoolGroupingDom(unittest.TestCase):
+    """node + 极简 DOM 桩执行真实 renderQuestionPool/onPoolChange/enrollSelfSelected：
+    自己领域 checkbox 可勾选、其他领域 disabled 置灰、越界勾选打回、
+    自选提交不带 track。"""
+
+    @classmethod
+    def setUpClass(cls):
+        m = re.search(r"/\* __POOL_LOGIC_BEGIN__ \*/(.*?)/\* __POOL_LOGIC_END__ \*/",
+                      es.PAGE, re.S)
+        assert m, "PAGE 内缺少 __POOL_LOGIC__ 标记块"
+        cls.logic = m.group(1)
+        cls.funcs = _extract_js_functions(
+            es.PAGE, "renderQuestionPool", "appendPoolDomainGroups",
+            "poolQuestionItem", "onPoolChange", "checkedPoolBoxes",
+            "updatePoolCount", "enrollSelfSelected")
+
+    def test_grouping_and_enroll_contract(self):
+        if not shutil.which("node"):
+            self.skipTest("node 不可用")
+        js = """
+const assert = require("assert");
+const POOL_MAX = 3;
+const DOMAIN_LABELS = {llm_arch: "语言/LLM（偏架构）", memory: "记忆系统", rl: "RL"};
+let state = {domain_keys: ["llm_arch", "memory"]};
+let __alerted = "", __errors = "", __enrollArgs = undefined;
+function alert(m) { __alerted = m; }
+function showErr(m) { __errors = m; }
+function enroll(track, ids) { __enrollArgs = [track, ids]; }
+function makeEl(tag) {
+  const el = {tagName: tag, children: [], style: {}, dataset: {},
+              listeners: {}, className: "", innerHTML: "",
+              type: "", value: "", checked: false, disabled: false,
+              classList: {add(){}, remove(){}, toggle(){}},
+              appendChild(c) { el.children.push(c); return c; },
+              addEventListener(t, f) { el.listeners[t] = f; }};
+  let text = "";
+  Object.defineProperty(el, "textContent", {
+    get() { return text; },
+    set(v) { text = v; if (v === "") el.children = []; },
+  });
+  return el;
+}
+const __poolRoot = makeEl("div");
+const document = {
+  createElement: (t) => makeEl(t),
+  getElementById: (id) => id === "question-pool" ? __poolRoot : null,
+  querySelectorAll(sel) {
+    assert.strictEqual(sel, "#question-pool input[type=checkbox]:checked");
+    const out = [];
+    (function walk(n) {
+      n.children.forEach(c => {
+        if (c.type === "checkbox" && c.checked) out.push(c);
+        walk(c);
+      });
+    })(__poolRoot);
+    return out;
+  },
+};
+""" + self.logic + self.funcs + """
+(async () => {
+  const questions = [
+    {id: "q1", domain: "llm_arch", track: "track1", title: "LLM题1", body: "B1"},
+    {id: "q2", domain: "llm_arch", track: "track2", title: "LLM题2", body: "B2"},
+    {id: "q3", domain: "memory",   track: "track1", title: "记忆题", body: "B3"},
+    {id: "q4", domain: "rl",       track: "track3", title: "RL题",  body: "B4"},
+  ];
+  renderQuestionPool(questions);
+  // 顺序收集分组头与题目行
+  const heads = [], items = [];
+  (function walk(n) {
+    n.children.forEach(c => {
+      if (c.className === "pool-track-head") heads.push(c);
+      if (c.className === "pool-item") items.push(c);
+      walk(c);
+    });
+  })(__poolRoot);
+  assert.deepStrictEqual(heads.map(h => h.textContent),
+    ["你的领域（可作答）", "其他领域（仅浏览，不可作答）"]);
+  assert.strictEqual(items.length, 4);
+  const cbOf = it => it.children[0].children[0];  // item > label > checkbox
+  const byId = {};
+  items.forEach(it => { byId[cbOf(it).value] = it; });
+  // 自己领域（llm_arch/memory）：checkbox 可用、挂了 change 监听
+  for (const id of ["q1", "q2", "q3"]) {
+    assert.strictEqual(cbOf(byId[id]).disabled, false, id);
+    assert.strictEqual(cbOf(byId[id]).dataset.domain !== "", true);
+    assert.strictEqual(typeof cbOf(byId[id]).listeners.change, "function", id);
+    assert.notStrictEqual(byId[id].style.opacity, "0.55", id);
+  }
+  // 其他领域（rl）：disabled + 整行置灰 + 无 change 监听
+  assert.strictEqual(cbOf(byId.q4).disabled, true);
+  assert.strictEqual(byId.q4.style.opacity, "0.55");
+  assert.strictEqual(cbOf(byId.q4).listeners.change, undefined);
+  // 领域小节头用中文标签
+  const domainHeads = [];
+  (function walk2(n) {
+    n.children.forEach(c => {
+      if (c.className === "pool-domain-head") domainHeads.push(c.textContent);
+      walk2(c);
+    });
+  })(__poolRoot);
+  assert(domainHeads.some(t => t.indexOf("语言/LLM（偏架构）") !== -1));
+  assert(domainHeads.some(t => t.indexOf("RL") !== -1));
+  // 勾选自己领域的题：onPoolChange 放行
+  cbOf(byId.q1).checked = true;
+  onPoolChange({target: cbOf(byId.q1)});
+  assert.strictEqual(cbOf(byId.q1).checked, true);
+  // 防御：其他领域被强制勾选 → 打回 + 提示
+  const foreign = cbOf(byId.q4);
+  foreign.disabled = false; foreign.checked = true;
+  onPoolChange({target: foreign});
+  assert.strictEqual(foreign.checked, false);
+  assert(__alerted.indexOf("只能选问卷里报过的领域") !== -1);
+  // POOL_MAX：勾满 3 题后第 4 个被拒（须挂进树里才会被计数，与真实 DOM 一致）
+  cbOf(byId.q2).checked = true; cbOf(byId.q3).checked = true;
+  const extra = makeEl("input");
+  extra.type = "checkbox"; extra.checked = true; extra.dataset.domain = "llm_arch";
+  extra.value = "qX";
+  __poolRoot.appendChild(extra);
+  onPoolChange({target: extra});
+  assert.strictEqual(extra.checked, false);
+  assert(__alerted.indexOf("最多自选") !== -1);
+  // enrollSelfSelected：不带 track，只传 question_ids
+  await enrollSelfSelected();
+  assert(__enrollArgs !== undefined);
+  assert.strictEqual(__enrollArgs[0], null);
+  assert.deepStrictEqual(__enrollArgs[1], ["q1", "q2", "q3"]);
+  // 越界防御：篡改一题为其他领域 → 拦截不提交
+  __enrollArgs = undefined; __errors = "";
+  cbOf(byId.q3).dataset.domain = "rl";
+  await enrollSelfSelected();
+  assert.strictEqual(__enrollArgs, undefined);
+  assert(__errors.indexOf("只能选问卷里报过的领域") !== -1);
+  console.log("POOL_DOM_OK");
+})().catch(e => { console.error(e); process.exit(1); });
+"""
+        TestPoolLogic._run_node(self, js, "POOL_DOM_OK")
 
     def test_page_script_syntax(self):
         if not shutil.which("node"):
@@ -404,38 +563,117 @@ console.log("POOL_VALIDATE_OK");
 
 
 class TestPoolPageCopy(unittest.TestCase):
-    """track3 视图页面要素：按领域分组 + 三类型徽标 + 同域互斥 + 隐藏轨迹筛选。"""
+    """M12 页面要素钉死：free_creation 两步向导、交卷四步（手动导出→清洗→预览→上传）、
+    own_project 直提指引。"""
 
-    def test_track3_view_copy_present(self):
-        self.assertIn("renderPoolTrack3", es.PAGE)
-        self.assertIn('领域：" + (DOMAIN_LABELS[domain] || domain)', es.PAGE)
-        self.assertIn('badge.textContent = trackTagLabel(q.track)', es.PAGE)
-        self.assertIn('onClick="enrollSelfSelectedTrack3()"'.replace("onClick", "onclick"), es.PAGE)
-        self.assertIn('bar.innerHTML = \'<button onclick="enrollSelfSelectedTrack3()">确认自选开考</button> \'', es.PAGE)
+    def test_wizard_dom_present(self):
+        self.assertIn('id="stage-wizard"', es.PAGE)
+        self.assertIn('id="wizard-domains"', es.PAGE)
+        self.assertIn('id="wizard-step2"', es.PAGE)
+        self.assertIn('id="wizard-questions"', es.PAGE)
+        self.assertIn("第 1 小步：选择一个领域", es.PAGE)
+        self.assertIn("第 2 小步：选一道题，或者直接自由发挥", es.PAGE)
+        self.assertIn("← 重选领域", es.PAGE)
+        self.assertIn("确认开考", es.PAGE)
 
-    def test_track3_view_filters_domains_and_sorts_track(self):
-        # 池子只显示考生领域内的题目，组内按 理论→实操→自由发挥 排序
-        self.assertIn("poolFilterByDomains(questions, state.domain_keys || [])", es.PAGE)
-        self.assertIn("poolSortByTrack(", es.PAGE)
-        self.assertIn('cb.dataset.domain = q.domain || "";', es.PAGE)
-        self.assertIn("ev.target.dataset.domain, poolDomById);", es.PAGE)
+    def test_wizard_logic_flow(self):
+        # 选领域 → 拉题库过滤该领域 → 单选 radio（题目或自由发挥）→ 确认 enroll
+        self.assertIn("wizardQuestionsForDomain(questions, k)", es.PAGE)
+        self.assertIn('rb.type = "radio";', es.PAGE)
+        self.assertIn('badge.textContent = trackTagLabel(q.track);', es.PAGE)
+        self.assertIn('const FREE_PICK = "__free__";', es.PAGE)
+        self.assertIn("自由发挥（不选题，在这个领域里自定题目创作）", es.PAGE)
+        self.assertIn('enroll("track3", null, wizardDomain);', es.PAGE)
+        self.assertIn('enroll("track3", [wizardPick]);', es.PAGE)
+        self.assertIn("请先选择领域", es.PAGE)
+        self.assertIn("请选择一道题，或选择「自由发挥」", es.PAGE)
 
-    def test_track3_view_has_no_track_filter_select(self):
-        # track3 分支渲染的确认栏不再构造 pool-track select
-        seg = es.PAGE[es.PAGE.index("enrollSelfSelectedTrack3()"):]
-        bar = seg[seg.index("bar.innerHTML"):seg.index("updatePoolCount();\n}\n")]
-        self.assertNotIn("pool-track", bar)
+    def test_standard_track_view_kept(self):
+        # 开考二选一：做题（题库自选）/ 交自有项目；不再渲染 track 按钮与随机抽题入口
+        self.assertIn('id="stage-track"', es.PAGE)
+        self.assertIn("选择作答方式", es.PAGE)
+        self.assertIn("做题：从题库选题作答", es.PAGE)
+        self.assertIn("交自有项目：GitHub 仓库 + 可选附件", es.PAGE)
+        self.assertIn("enterPoolMode()", es.PAGE)
+        self.assertIn("enterProjectMode()", es.PAGE)
+        self.assertIn("enrollSelfSelected()", es.PAGE)
+        self.assertNotIn("renderTracks", es.PAGE)
+        self.assertNotIn("浏览题库自选题", es.PAGE)
+        self.assertNotIn("随机抽题", es.PAGE)
+        self.assertNotIn("renderPoolTrack3", es.PAGE)
 
-    def test_type_badges_and_errors(self):
-        self.assertIn("理论", es.PAGE)
-        self.assertIn("实操", es.PAGE)
-        self.assertIn("自由发挥", es.PAGE)
-        self.assertIn("已选", es.PAGE)
-        self.assertIn("请至少选择 1 道题", es.PAGE)
-        self.assertIn("同一领域只能选择一道题作答", es.PAGE)
-        self.assertIn("同一领域最多勾 1 道题", es.PAGE)
-        self.assertIn('.sel-tag', es.PAGE)
-        self.assertIn(".pool-badge", es.PAGE)
+    def test_pool_grouping_copy(self):
+        # 题库自选按「你的领域 / 其他领域」分组；其他领域禁用勾选 + 置灰
+        self.assertIn("你的领域（可作答）", es.PAGE)
+        self.assertIn("其他领域（仅浏览，不可作答）", es.PAGE)
+        self.assertIn("poolSplitByDomains", es.PAGE)
+        self.assertIn("cb.disabled = true", es.PAGE)
+        self.assertIn('item.style.opacity = "0.55"', es.PAGE)
+        self.assertIn("cb.dataset.domain = q.domain", es.PAGE)
+        self.assertIn("只能选问卷里报过的领域", es.PAGE)
+        # 不再按 track 分组/过滤：无轨迹下拉、无 dataset.track
+        self.assertNotIn('id="pool-track"', es.PAGE)
+        self.assertNotIn("轨迹：<select", es.PAGE)
+        self.assertNotIn("dataset.track", es.PAGE)
+
+    def test_exam_mode_only_recommends_default_view(self):
+        # exam_mode 只做默认落页推荐（不硬拦）：preferredView 优先，
+        # own_project 考生也能从自有项目页「改为做题」进题库自选页
+        self.assertIn("preferredView ||", es.PAGE)
+        self.assertIn('state.exam_mode === "own_project" ? "project"', es.PAGE)
+        self.assertIn("backToQuestionMode", es.PAGE)
+        self.assertIn("改为做题（从题库选题作答）", es.PAGE)
+
+    def test_finish_four_steps_copy(self):
+        # 手动导出指引卡（不默认扫库，含具体导出步骤）
+        self.assertIn("不会自动翻找你电脑里的历史会话", es.PAGE)
+        self.assertIn("opencode session list", es.PAGE)
+        self.assertIn("opencode export 会话ID", es.PAGE)
+        self.assertIn("kimi export", es.PAGE)
+        # 逐题提交槽：每题一格独立清洗、独立上传（不合并）
+        self.assertIn('id="slot-list"', es.PAGE)
+        self.assertIn("第 2 小步：逐题清洗", es.PAGE)
+        self.assertIn("第 3 小步：确认没有不该上传的内容后，点上传", es.PAGE)
+        self.assertIn('id="preview-frame"', es.PAGE)
+        self.assertIn('id="preview-text"', es.PAGE)
+        # 乱序清洗不重建 DOM：签名只看题目结构，状态原地更新（保住文件选择）
+        self.assertIn("updateSlotStatus", es.PAGE)
+        self.assertIn('slot-cleanbtn-', es.PAGE)
+        self.assertNotIn("slots).sort().map(", es.PAGE)  # 旧签名含槽位 base 会触发重建
+        # 自动发现降级为每题可选按钮，且明示只找考试工作区
+        self.assertIn("在本题工作区帮我找", es.PAGE)
+        self.assertIn("只找考试工作区内的，不碰其它目录", es.PAGE)
+        # /export 陷阱提示：md 导出不能交卷；kimi 的 zip 导出入口
+        self.assertIn("/export-debug-zip", es.PAGE)
+        self.assertIn("Markdown 文档", es.PAGE)
+        # 仓库链接输入框防轮询覆盖（repoDirty 脏标记）
+        self.assertIn("repoDirty", es.PAGE)
+
+    def test_finish_endpoints_wired(self):
+        self.assertIn('"/api/clean_export"', es.PAGE)
+        self.assertIn('"/api/clean_scanned"', es.PAGE)
+        self.assertIn('"/api/upload_cleaned"', es.PAGE)
+        self.assertIn('"/api/scan_sessions"', es.PAGE)
+        self.assertIn('"/api/preview?base="', es.PAGE)
+
+    def test_own_project_direct_submit_copy(self):
+        self.assertIn('id="stage-ownproject"', es.PAGE)
+        self.assertIn('id="project-repo-url"', es.PAGE)
+        self.assertIn('id="project-attachment-file"', es.PAGE)
+        self.assertIn('id="project-submit-btn"', es.PAGE)
+        self.assertIn("提交自有项目，完成交卷", es.PAGE)
+        self.assertIn("submitOwnProject()", es.PAGE)
+        self.assertIn('"/api/submit_project"', es.PAGE)
+        self.assertIn("无需在本机选题作答", es.PAGE)
+        # 账号页兜底入口保留
+        self.assertIn("openAccountPage", es.PAGE)
+        self.assertIn('"/api/open_account_page"', es.PAGE)
+
+    def test_free_creation_exam_stage_copy(self):
+        # 自由发挥开考：引导语 + 工作区卡，无题面正文
+        self.assertIn("自由发挥（不选题）· 领域：", es.PAGE)
+        self.assertIn("产出将通过本次作答的会话轨迹评估", es.PAGE)
+        self.assertIn('id="exam-title"', es.PAGE)
 
     def test_workspace_guidance_copy(self):
         self.assertIn("在这里作答：", es.PAGE)
@@ -445,7 +683,7 @@ class TestPoolPageCopy(unittest.TestCase):
         self.assertIn("在此工作区打开 ", es.PAGE)
         self.assertIn("本题为 ", es.PAGE)
         self.assertIn("/api/open_agent_workspace", es.PAGE)
-        # 每域一题：题面页把涉及领域的每个工作区都列出来（去重）
+        # 工作区卡把涉及领域的每个工作区都列出来（去重）
         self.assertIn("const seen = {};", es.PAGE)
         self.assertIn("blocks.push({domain: domain, dir: dir,", es.PAGE)
         self.assertIn('打开「" + b.label + "」工作区', es.PAGE)

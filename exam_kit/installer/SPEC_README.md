@@ -43,5 +43,5 @@
 ## 遗留留意项（非阻塞）
 
 - opencode 免费模型是 OpenCode Zen 限时 $0 型号，出货前建议再刷
-  opencode.ai/docs/zen/ 确认清单仍在（COMPONENTS.md §8）。
+  opencode.ai/docs/zen/ 确认清单仍在（COMPONENTS.md §10）。
 - Python / PortableGit 哈希为自算（官方页无第三方可比对哈希），HTTPS 官方域下载。

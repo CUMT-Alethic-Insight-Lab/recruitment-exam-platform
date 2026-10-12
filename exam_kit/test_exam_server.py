@@ -15,6 +15,7 @@ import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 try:
     import cleaner  # 真实清洗模块（并行交付）；单测内会被下面的假实现覆盖
@@ -462,6 +463,7 @@ class _StubAuthCloudHandler(BaseHTTPRequestHandler):
             "path": self.path,
             "authorization": self.headers.get("Authorization"),
             "session_token": self.headers.get("X-Session-Token"),
+            "content_type": self.headers.get("Content-Type", ""),
             "body": self.rfile.read(length),
         })
 
@@ -482,6 +484,13 @@ class _StubAuthCloudHandler(BaseHTTPRequestHandler):
                 self._json(401, {"detail": "请重新登录"})
             else:
                 self._json(200, _POOL_QUESTIONS)
+        elif self.path.endswith("/exam/my_sessions"):
+            if self.server.mode == "expired":
+                self._json(401, {"detail": "请重新登录"})
+            elif self.server.my_sessions is None:
+                self._json(404, {"detail": "not found"})
+            else:
+                self._json(200, self.server.my_sessions)
         else:
             self._json(404, {"detail": "not found"})
 
@@ -509,10 +518,22 @@ class _StubAuthCloudHandler(BaseHTTPRequestHandler):
                                             "questions": [],
                                             "rerolls_left": 2}})
             else:
+                # 不带 track 的题库自选：会话 track 落 "selected"
+                payload = json.loads(self.server.requests[-1]["body"] or b"{}")
                 self._json(200, {"session_id": "cloud-ses-1", "session_token": "tok-1",
-                                 "machine_id": "m-1", "track": "track1",
+                                 "machine_id": "m-1",
+                                 "track": payload.get("track") or "selected",
                                  "questions": [], "track3_guide_text": "",
                                  "rerolls_left": 2})
+        elif self.path.endswith("/applications/me/project"):
+            if expired:
+                self._json(401, {"detail": "请重新登录"})
+            elif mode == "project_conflict":
+                self._json(409, {"detail": {"code": "already_exists",
+                                            "message": "已有未作废的考试会话"}})
+            else:
+                self._json(200, {"ok": True, "session_id": "cloud-ses-p1",
+                                 "track": "project", "status": "uploaded"})
         elif self.path.endswith("/exam/reroll"):
             if expired or not self.headers.get("X-Session-Token"):
                 self._json(401, {"detail": "请重新登录"})
@@ -547,6 +568,7 @@ class TestAuthFlowBase(_LocalServerTestCase):
         self.cloud.requests = []
         self.cloud.mode = "ok"
         self.cloud.exam_mode = "standard"
+        self.cloud.my_sessions = None
         self.cloud_port = self.cloud.server_address[1]
         threading.Thread(target=self.cloud.serve_forever, daemon=True).start()
 
@@ -639,6 +661,68 @@ class TestLoginFlow(TestAuthFlowBase):
         self.assertEqual(cm.exception.code, 400)
         cm.exception.close()
         self.assertEqual(self.cloud.requests, [])
+
+
+class TestMySessionsReconcile(TestAuthFlowBase):
+    """作废后对账降级（/api/my_sessions）：云端是完成状态的唯一事实源。"""
+
+    def _seed_uploaded_state(self, **extra):
+        base = dict(auth_token=_AUTH_TOKEN, exam_mode="standard",
+                    stage="uploaded", uploaded=True, session_id="cloud-ses-1")
+        base.update(extra)
+        self.write_state(**base)
+
+    @staticmethod
+    def _session(status, domains=None, track="track1"):
+        return {"session_id": "cloud-ses-1", "track": track,
+                "domain_tags": domains if domains is not None else ["llm_arch"],
+                "status": status, "opened_at": "t1",
+                "uploaded_at": "t2" if status == "uploaded" else "",
+                "repo_url": ""}
+
+    def test_voided_uploaded_session_downgrades_to_logged_in(self):
+        self._seed_uploaded_state()
+        self.cloud.my_sessions = [self._session("voided")]
+        data = self.get_json("/api/my_sessions")
+        self.assertTrue(data["synced"])
+        self.assertEqual(data["stage"], "logged_in")
+        self.assertFalse(data.get("uploaded"))
+        self.assertNotIn("session_id", data)
+        self.assertEqual(self.read_state()["stage"], "logged_in")
+
+    def test_still_uploaded_keeps_done_page(self):
+        self._seed_uploaded_state()
+        self.cloud.my_sessions = [self._session("uploaded")]
+        data = self.get_json("/api/my_sessions")
+        self.assertEqual(data["stage"], "uploaded")
+        self.assertTrue(data["uploaded"])
+
+    def test_finished_but_unuploaded_not_downgraded(self):
+        # 上传未完成的 finished 态不是「作废」：本地还指望重传，不能清场
+        self._seed_uploaded_state(stage="finished", uploaded=False,
+                                  pending_base="b1")
+        self.cloud.my_sessions = []
+        data = self.get_json("/api/my_sessions")
+        self.assertEqual(data["stage"], "finished")
+        self.assertEqual(data.get("pending_base"), "b1")
+
+    def test_free_creation_partial_void_returns_to_wizard(self):
+        self._seed_uploaded_state(exam_mode="free_creation",
+                                  domain_keys=["llm_arch", "rl"])
+        self.cloud.my_sessions = [
+            self._session("uploaded", domains=["llm_arch"], track="track3")]
+        data = self.get_json("/api/my_sessions")
+        self.assertEqual(data["stage"], "logged_in")
+        self.assertIn("llm_arch", data["submissions"])
+        self.assertNotIn("rl", data["submissions"])
+
+    def test_cloud_unreachable_keeps_local_state(self):
+        self._seed_uploaded_state()
+        self.cloud.my_sessions = None  # 404 → synced=False，本地完成态兜底
+        data = self.get_json("/api/my_sessions")
+        self.assertFalse(data["synced"])
+        self.assertEqual(data["stage"], "uploaded")
+        self.assertTrue(data["uploaded"])
 
 
 class TestEnrollRerollAuth(TestAuthFlowBase):
@@ -738,9 +822,10 @@ class TestExamModeFlow(TestAuthFlowBase):
         self.assertEqual(out["exam_mode"], "own_project")
         state = self.read_state()
         self.assertEqual(state["exam_mode"], "own_project")
-        # 页面含个人项目轨提示文案，且提示文案与常量一致
-        self.assertIn(es.OWN_PROJECT_NOTICE, es.PAGE)
-        self.assertIn("无需使用本机考试", es.OWN_PROJECT_NOTICE)
+        # 自有项目页改为机试包内直交（仓库链接 + 可选附件 + 提交按钮）
+        self.assertIn('id="project-repo-url"', es.PAGE)
+        self.assertIn("提交自有项目，完成交卷", es.PAGE)
+        self.assertIn("/api/submit_project", es.PAGE)
 
     def test_login_free_creation_stores_mode_and_repo_input(self):
         out = self.login("free_creation")
@@ -824,20 +909,180 @@ class TestExamModeFlow(TestAuthFlowBase):
             cm.exception.close()
         self.assertEqual(self.cloud_enroll_requests(), [])
 
+    def _post_enroll_error(self, body: dict):
+        req = urllib.request.Request(
+            self.url("/api/enroll"), data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        payload = json.loads(cm.exception.read() or b"{}")
+        code = cm.exception.code
+        cm.exception.close()
+        return code, payload
+
+    def test_enroll_self_selected_without_track(self):
+        # 题库自选：body 不带 track，云端会话落 "selected"；本地先拉题库做领域预校验
+        self.write_state(stage="logged_in", name="张三", pw_changed=True,
+                         auth_token=_AUTH_TOKEN, domain_keys=["网络"])
+        out = self.post_json("/api/enroll", {"question_ids": ["q-1", "q-2"]})
+        self.assertEqual(out["stage"], "enrolled")
+        req = self.cloud_enroll_requests()[-1]
+        body = json.loads(req["body"])
+        self.assertNotIn("track", body)
+        self.assertEqual(body, {"question_ids": ["q-1", "q-2"]})
+        self.assertTrue(any(
+            r["method"] == "GET" and r["path"].endswith("/exam/questions")
+            and r["authorization"] == f"Bearer {_AUTH_TOKEN}"
+            for r in self.cloud.requests))  # 领域预校验拉过题库
+        state = self.read_state()
+        self.assertEqual(state["track"], "selected")
+        self.assertEqual(state["track_name"], "题库自选")
+        self.assertTrue(state["self_selected"])
+
+    def test_enroll_self_selected_domain_outside_rejected_locally(self):
+        # q-3 属于「系统」领域，考生只报了「网络」：本地拦下，不发 enroll
+        self.write_state(stage="logged_in", name="张三", pw_changed=True,
+                         auth_token=_AUTH_TOKEN, domain_keys=["网络"])
+        code, payload = self._post_enroll_error({"question_ids": ["q-1", "q-3"]})
+        self.assertEqual(code, 400)
+        self.assertIn("只能选问卷里报过的领域", payload["error"])
+        self.assertEqual(self.cloud_enroll_requests(), [])
+
+    def test_enroll_self_selected_unknown_question_rejected(self):
+        self.write_state(stage="logged_in", name="张三", pw_changed=True,
+                         auth_token=_AUTH_TOKEN, domain_keys=["网络", "系统"])
+        code, payload = self._post_enroll_error({"question_ids": ["q-x"]})
+        self.assertEqual(code, 400)
+        self.assertIn("题库里没有找到所选题目", payload["error"])
+        self.assertEqual(self.cloud_enroll_requests(), [])
+
+    def test_enroll_no_track_no_questions_rejected(self):
+        self.write_logged_in()
+        code, payload = self._post_enroll_error({})
+        self.assertEqual(code, 400)
+        self.assertIn("请先从题库勾选", payload["error"])
+        self.assertEqual(self.cloud_enroll_requests(), [])
+
+
+class TestSubmitProjectFlow(TestAuthFlowBase):
+    """自有项目直交：/api/submit_project → 云端 multipart
+    POST /applications/me/project（Bearer），成功即完成交卷（track=project）。"""
+
+    def write_logged_in(self, **extra):
+        base = dict(stage="logged_in", name="张三", pw_changed=True,
+                    auth_token=_AUTH_TOKEN)
+        base.update(extra)
+        self.write_state(**base)
+
+    def _post_project(self, body: dict):
+        req = urllib.request.Request(
+            self.url("/api/submit_project"), data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            payload = json.loads(exc.read() or b"{}")
+            code = exc.code
+            exc.close()
+            return code, payload
+
+    def test_submit_ok_sends_multipart_and_bearer(self):
+        self.write_logged_in()
+        status, out = self._post_project(
+            {"repo_url": "https://github.com/x/y"})
+        self.assertEqual(status, 200)
+        self.assertEqual(out["stage"], "uploaded")
+        self.assertTrue(out["uploaded"])
+        self.assertEqual(out["track"], "project")
+        self.assertEqual(out["track_name"], "自有项目")
+        req = self.cloud.requests[-1]
+        self.assertEqual(req["path"],
+                         "/api/campaigns/2026autumn/applications/me/project")
+        self.assertEqual(req["authorization"], f"Bearer {_AUTH_TOKEN}")
+        self.assertTrue(
+            req["content_type"].startswith("multipart/form-data; boundary="))
+        fields, files = _parse_multipart(req["body"], req["content_type"])
+        self.assertEqual(fields, {"repo_url": "https://github.com/x/y"})
+        self.assertEqual(files, {})
+        state = self.read_state()
+        self.assertEqual(state["track"], "project")
+        self.assertEqual(state["repo_url"], "https://github.com/x/y")
+
+    def test_submit_with_attachment_includes_file(self):
+        self.write_logged_in(attachment_name="work.zip")
+        att = es.PENDING_DIR / "attachment_08260001.zip"
+        att.write_bytes(b"PK\x03\x04zipdata")
+        status, _ = self._post_project({"repo_url": "https://github.com/x/y"})
+        self.assertEqual(status, 200)
+        req = self.cloud.requests[-1]
+        fields, files = _parse_multipart(req["body"], req["content_type"])
+        self.assertEqual(fields, {"repo_url": "https://github.com/x/y"})
+        self.assertEqual(files, {"attachment": b"PK\x03\x04zipdata"})
+
+    def test_submit_calls_cloud_request_multipart_contract(self):
+        # mock cloud_request 断言 FormData 字段与 Bearer（不含真实网络）
+        self.write_logged_in(attachment_name="work.zip")
+        att = es.PENDING_DIR / "attachment_08260001.zip"
+        att.write_bytes(b"PK")
+        with mock.patch.object(
+                es, "cloud_request", return_value=(200, {"ok": True})) as cr:
+            status, out = self._post_project(
+                {"repo_url": "https://github.com/x/y"})
+        self.assertEqual(status, 200)
+        self.assertEqual(out["track"], "project")
+        args, kwargs = cr.call_args
+        self.assertEqual(args[1], "POST")
+        self.assertTrue(args[2].endswith("/applications/me/project"))
+        self.assertEqual(kwargs["multipart_fields"],
+                         {"repo_url": "https://github.com/x/y"})
+        self.assertEqual(kwargs["multipart_files"], [("attachment", att)])
+        self.assertEqual(kwargs["bearer"], _AUTH_TOKEN)
+
+    def test_submit_conflict_409_friendly(self):
+        self.write_logged_in()
+        self.cloud.mode = "project_conflict"
+        status, out = self._post_project(
+            {"repo_url": "https://github.com/x/y"})
+        self.assertEqual(status, 409)
+        self.assertIn("已有交卷记录", out["error"])
+        self.assertEqual(self.read_state()["stage"], "logged_in")
+
+    def test_submit_requires_login(self):
+        es.STATE_PATH.write_text(json.dumps({"stage": ""}), encoding="utf-8")
+        status, out = self._post_project(
+            {"repo_url": "https://github.com/x/y"})
+        self.assertEqual(status, 400)
+        self.assertEqual(self.cloud.requests, [])
+
+    def test_submit_bad_repo_url_400(self):
+        self.write_logged_in()
+        for bad in ("", "github.com/x/y", "ftp://x/y"):
+            status, out = self._post_project({"repo_url": bad})
+            self.assertEqual(status, 400, bad)
+        self.assertEqual(self.cloud.requests, [])
+
+    def test_submit_cloud_401_expires_session(self):
+        self.write_logged_in()
+        self.cloud.mode = "expired"
+        status, out = self._post_project(
+            {"repo_url": "https://github.com/x/y"})
+        self.assertEqual(status, 401)
+        self.assertIn("重新登录", out["error"])
+        state = self.read_state()
+        self.assertNotIn("auth_token", state)
+        self.assertEqual(state["stage"], "")
+
 
 class TestFinishFlow(_LocalServerTestCase):
-    """交卷端到端（导出/定位均打桩）：成功→uploaded；失败→finished+upload_pending。"""
+    """交卷端到端（M12 手动导出流，上传打桩）：清洗→预览→确认上传；
+    上传失败→finished+upload_pending，清洗产物本地留存。"""
 
     def setUp(self):
         self.install_tmp_dirs()
         self.orig = {name: getattr(es, name) for name in
-                     ("upload_session", "export_session", "iter_kimi_sessions",
-                      "kimi_home", "load_cleaner")}
-        es.load_cleaner = lambda: _make_fake_cleaner()
-        es.export_session = lambda cfg, session, out_path: "测试导出"
-        es.iter_kimi_sessions = lambda home: [
-            {"sessionId": "kimi-1", "sessionDir": "D:/s", "createdAt": 1}]
-        es.kimi_home = lambda cfg: Path("D:/nonexistent")
+                     ("upload_session", "load_cleaner")}
+        es.load_cleaner = lambda: _make_fake_cleaner(with_session=True)
         self.write_state(
             stage="enrolled", session_id="cloud-ses-1", session_token="tok-1",
             track="track1", opened_at="1970-01-01T00:00:00+00:00")
@@ -849,22 +1094,57 @@ class TestFinishFlow(_LocalServerTestCase):
             setattr(es, name, val)
         self.restore_dirs()
 
-    def _post_finish(self, body: dict | None = None):
+    @staticmethod
+    def _kimi_zip_bytes() -> bytes:
+        import io as _io
+        buf = _io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("state.json", json.dumps({"id": "kimi-1"}))
+            z.writestr("agents/main/wire.jsonl", '{"msg":"hello"}\n')
+        return buf.getvalue()
+
+    def _post_clean(self, data: bytes, name="session.zip"):
+        req = urllib.request.Request(
+            self.url("/api/clean_export"), data=data,
+            headers={"X-Source-Name": name}, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read())
+
+    def _post_upload(self, body: dict | None = None):
         data = json.dumps(body if body is not None else {}).encode("utf-8")
         req = urllib.request.Request(
-            self.url("/api/finish"), data=data,
+            self.url("/api/upload_cleaned"), data=data,
             headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req) as resp:
             return json.loads(resp.read())
 
-    def test_finish_success_sets_uploaded(self):
+    def _post_upload_error(self, body: dict):
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            self.url("/api/upload_cleaned"), data=data,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        payload = json.loads(cm.exception.read() or b"{}")
+        code = cm.exception.code
+        cm.exception.close()
+        return code, payload
+
+    def test_clean_preview_upload_success(self):
         calls = []
-
-        def fake_upload(cfg, meta):
-            calls.append(meta)
-
-        es.upload_session = fake_upload
-        state = self._post_finish({"repo_url": "https://github.com/x/y"})
+        es.upload_session = lambda cfg, meta: calls.append(meta)
+        out = self._post_clean(self._kimi_zip_bytes())
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["preview_base"], "08260001_cloud-ses-1")
+        self.assertEqual(out["preview_kind"], "md")  # 假 cleaner 不产 cleaned.html
+        self.assertEqual(out["agent_session_id"], "kimi-1")
+        self.assertEqual(calls, [])  # 清洗阶段绝不上传
+        # 预览端点：md 纯文本
+        with urllib.request.urlopen(
+                self.url("/api/preview?base=08260001_cloud-ses-1")) as resp:
+            self.assertIn("text/plain", resp.headers["Content-Type"])
+            self.assertIn("# cleaned", resp.read().decode("utf-8"))
+        state = self._post_upload({"repo_url": "https://github.com/x/y"})
         self.assertEqual(state["stage"], "uploaded")
         self.assertTrue(state["uploaded"])
         self.assertEqual(state["repo_url"], "https://github.com/x/y")
@@ -875,12 +1155,13 @@ class TestFinishFlow(_LocalServerTestCase):
         self.assertTrue((es.PENDING_DIR / meta["cleaned_jsonl"]).exists())
         self.assertEqual(calls[0]["repo_url"], "https://github.com/x/y")
 
-    def test_finish_upload_failure_keeps_pending(self):
+    def test_upload_failure_keeps_pending(self):
         def failing_upload(cfg, meta):
             raise es.CloudError("无法连接云端", status=0)
 
         es.upload_session = failing_upload
-        state = self._post_finish()
+        self._post_clean(self._kimi_zip_bytes())
+        state = self._post_upload()
         self.assertEqual(state["stage"], "finished")
         self.assertTrue(state["upload_pending"])
         self.assertFalse(state["uploaded"])
@@ -891,35 +1172,209 @@ class TestFinishFlow(_LocalServerTestCase):
         # 清洗产物仍然留存本地
         self.assertTrue((es.PENDING_DIR / meta["cleaned_jsonl"]).exists())
 
-    def test_finish_without_repo_url(self):
+    def test_upload_without_repo_url(self):
         es.upload_session = lambda cfg, meta: None
-        state = self._post_finish()
+        self._post_clean(self._kimi_zip_bytes())
+        state = self._post_upload()
         self.assertEqual(state["repo_url"], "")
         meta = json.loads(
             (es.PENDING_DIR / "08260001_cloud-ses-1.meta.json").read_text(encoding="utf-8"))
         self.assertEqual(meta["repo_url"], "")
 
-    def test_finish_rejects_bad_repo_url(self):
+    def test_upload_rejects_bad_repo_url(self):
         calls = []
         es.upload_session = lambda cfg, meta: calls.append(meta)
-        data = json.dumps({"repo_url": "github.com/x/y"}).encode("utf-8")
+        self._post_clean(self._kimi_zip_bytes())
+        code, payload = self._post_upload_error({"repo_url": "github.com/x/y"})
+        self.assertEqual(code, 400)
+        self.assertIn("仓库链接格式不正确", payload["error"])
+        # stage 不变，无任何上传副作用
+        self.assertEqual(self.read_state()["stage"], "enrolled")
+        self.assertEqual(calls, [])
+        meta = json.loads(
+            (es.PENDING_DIR / "08260001_cloud-ses-1.meta.json").read_text(encoding="utf-8"))
+        self.assertFalse(meta["uploaded"])
+
+    def test_upload_accepts_http_repo_url(self):
+        es.upload_session = lambda cfg, meta: None
+        self._post_clean(self._kimi_zip_bytes())
+        state = self._post_upload({"repo_url": "http://github.com/x/y"})
+        self.assertEqual(state["stage"], "uploaded")
+        self.assertEqual(state["repo_url"], "http://github.com/x/y")
+
+    def test_upload_without_clean_400(self):
+        code, payload = self._post_upload_error({})
+        self.assertEqual(code, 400)
+        self.assertIn("清洗", payload["error"])
+
+
+class TestSlotUploadFlow(_LocalServerTestCase):
+    """多题考试逐题提交槽：每题独立清洗（X-Slot）、独立上传（meta.slot_index），
+    不合并；失败的题由补传 worker 逐题重传，全部传完才收敛到完成页。"""
+
+    QUESTIONS = [
+        {"id": "q-1", "domain": "llm_arch", "title": "题一", "body": "正文一"},
+        {"id": "q-2", "domain": "rl", "title": "题二", "body": "正文二"},
+        {"id": "q-3", "domain": "agent", "title": "题三", "body": "正文三"},
+    ]
+
+    def setUp(self):
+        self.install_tmp_dirs()
+        self.orig = {name: getattr(es, name) for name in
+                     ("upload_session", "load_cleaner")}
+        es.load_cleaner = lambda: _make_fake_cleaner(with_session=True)
+        self.calls = []
+        es.upload_session = lambda cfg, meta: self.calls.append(dict(meta))
+        self.write_state(
+            stage="enrolled", session_id="cloud-ses-1", session_token="tok-1",
+            track="track1", questions=[dict(q) for q in self.QUESTIONS],
+            opened_at="1970-01-01T00:00:00+00:00")
+        self.start_server()
+
+    def tearDown(self):
+        self.stop_server()
+        for name, val in self.orig.items():
+            setattr(es, name, val)
+        self.restore_dirs()
+
+    @staticmethod
+    def _kimi_zip_bytes() -> bytes:
+        import io as _io
+        buf = _io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("state.json", json.dumps({"id": "kimi-1"}))
+            z.writestr("agents/main/wire.jsonl", '{"msg":"hello"}\n')
+        return buf.getvalue()
+
+    def _clean_slot(self, slot: int):
         req = urllib.request.Request(
-            self.url("/api/finish"), data=data,
+            self.url("/api/clean_export"), data=self._kimi_zip_bytes(),
+            headers={"X-Source-Name": "session.zip", "X-Slot": str(slot)},
+            method="POST")
+        with urllib.request.urlopen(req) as resp:
+            out = json.loads(resp.read())
+        self.assertTrue(out["ok"])
+        return out
+
+    def _clean_slot_error(self, slot: int):
+        req = urllib.request.Request(
+            self.url("/api/clean_export"), data=self._kimi_zip_bytes(),
+            headers={"X-Source-Name": "session.zip", "X-Slot": str(slot)},
+            method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        payload = json.loads(cm.exception.read() or b"{}")
+        code = cm.exception.code
+        cm.exception.close()
+        return code, payload
+
+    def _post_upload(self, body: dict | None = None):
+        data = json.dumps(body if body is not None else {}).encode("utf-8")
+        req = urllib.request.Request(
+            self.url("/api/upload_cleaned"), data=data,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read())
+
+    def _post_upload_error(self, body: dict):
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            self.url("/api/upload_cleaned"), data=data,
             headers={"Content-Type": "application/json"}, method="POST")
         with self.assertRaises(urllib.error.HTTPError) as cm:
             urllib.request.urlopen(req)
-        self.assertEqual(cm.exception.code, 400)
+        payload = json.loads(cm.exception.read() or b"{}")
+        code = cm.exception.code
         cm.exception.close()
-        # stage 不变，无任何交卷副作用
-        self.assertEqual(self.read_state()["stage"], "enrolled")
-        self.assertEqual(calls, [])
-        self.assertFalse((es.PENDING_DIR / "08260001_cloud-ses-1.meta.json").exists())
+        return code, payload
 
-    def test_finish_accepts_http_repo_url(self):
-        es.upload_session = lambda cfg, meta: None
-        state = self._post_finish({"repo_url": "http://github.com/x/y"})
+    def test_slot_bases_and_registry(self):
+        out0 = self._clean_slot(0)
+        out2 = self._clean_slot(2)
+        # 第 1 题沿用旧命名，其余带 _qN 后缀
+        self.assertEqual(out0["preview_base"], "08260001_cloud-ses-1")
+        self.assertEqual(out2["preview_base"], "08260001_cloud-ses-1_q2")
+        state = self.read_state()
+        self.assertEqual(sorted(state["slots"]), ["0", "2"])
+        # 槽位 meta 记录 slot_index（逐题各自上传用），不再是合并跳过标记
+        meta2 = json.loads(
+            (es.PENDING_DIR / "08260001_cloud-ses-1_q2.meta.json")
+            .read_text(encoding="utf-8"))
+        self.assertEqual(meta2["slot_index"], 2)
+        self.assertNotIn("slot", meta2)
+        # 任一已登记槽位都可预览
+        with urllib.request.urlopen(
+                self.url("/api/preview?base=08260001_cloud-ses-1_q2")) as resp:
+            self.assertEqual(resp.status, 200)
+
+    def test_slot_out_of_range_400(self):
+        code, payload = self._clean_slot_error(3)
+        self.assertEqual(code, 400)
+        self.assertIn("题号超出范围", payload["error"])
+
+    def test_upload_all_slots_separately(self):
+        self._clean_slot(0)
+        self._clean_slot(1)
+        self._clean_slot(2)
+        state = self._post_upload({"repo_url": "https://github.com/x/y"})
         self.assertEqual(state["stage"], "uploaded")
-        self.assertEqual(state["repo_url"], "http://github.com/x/y")
+        # 逐题各自上传：三次调用、各带 slot_index，不合并
+        self.assertEqual(len(self.calls), 3)
+        self.assertEqual([c["slot_index"] for c in self.calls], [0, 1, 2])
+        self.assertEqual(self.calls[0]["cleaned_jsonl"],
+                         "08260001_cloud-ses-1/cleaned.jsonl")
+        self.assertEqual(self.calls[1]["cleaned_jsonl"],
+                         "08260001_cloud-ses-1_q1/cleaned.jsonl")
+        self.assertEqual(self.calls[2]["cleaned_jsonl"],
+                         "08260001_cloud-ses-1_q2/cleaned.jsonl")
+        for c in self.calls:
+            self.assertEqual(c["repo_url"], "https://github.com/x/y")
+        # 不产出合并件
+        self.assertFalse(
+            (es.PENDING_DIR / "08260001_cloud-ses-1_all").exists())
+
+    def test_upload_partial_slots_only(self):
+        self._clean_slot(0)  # 只交第 1 题
+        state = self._post_upload()
+        self.assertEqual(state["stage"], "uploaded")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0]["slot_index"], 0)
+
+    def test_upload_without_any_clean_400(self):
+        code, payload = self._post_upload_error({})
+        self.assertEqual(code, 400)
+        self.assertIn("逐题清洗", payload["error"])
+        self.assertEqual(self.calls, [])
+
+    def test_worker_uploads_slot_metas_individually(self):
+        self._clean_slot(0)
+        es.retry_pending_uploads()
+        # 槽位件也各自补传（不再等合并件）
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0]["slot_index"], 0)
+        self.assertEqual(self.read_state()["stage"], "uploaded")
+
+    def test_failure_then_worker_retries_failed_slot(self):
+        self._clean_slot(0)
+        self._clean_slot(1)
+
+        def fail_slot1(cfg, meta):
+            if meta.get("slot_index") == 1:
+                raise es.CloudError("无法连接云端", status=0)
+            self.calls.append(dict(meta))
+
+        es.upload_session = fail_slot1
+        state = self._post_upload()
+        self.assertEqual(state["stage"], "finished")
+        self.assertTrue(state["upload_pending"])
+        self.assertIn("第 2 题", state["upload_error"])
+        self.assertEqual(len(self.calls), 1)  # 只有第 1 题成功
+        # worker 补传失败的第 2 题，全部传完后收敛到完成页
+        es.upload_session = lambda cfg, meta: self.calls.append(dict(meta))
+        es.retry_pending_uploads()
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.calls[1]["slot_index"], 1)
+        self.assertEqual(self.read_state()["stage"], "uploaded")
 
 
 class TestRetryUpload(_LocalServerTestCase):
@@ -1166,7 +1621,7 @@ class TestOpenCodeDiscovery(unittest.TestCase):
 
 
 class TestFinishFlowOpenCode(_LocalServerTestCase):
-    """opencode 交卷端到端（发现/上传打桩）：clean_session 路径 + 手动兜底。"""
+    """opencode 交卷端到端（M12 手动导出流）：手动提供会话 JSON → 清洗 → 上传。"""
 
     DOC = {
         "info": {"id": "ses_oc_1", "directory": "P:\\proj",
@@ -1182,15 +1637,9 @@ class TestFinishFlowOpenCode(_LocalServerTestCase):
     def setUp(self):
         self.install_tmp_dirs()
         self.orig = {name: getattr(es, name) for name in
-                     ("upload_session", "iter_opencode_sessions",
-                      "opencode_home", "load_cleaner", "agent_workdir")}
+                     ("upload_session", "load_cleaner")}
         es.load_cleaner = lambda: _make_fake_cleaner(with_session=True)
         es.upload_session = lambda cfg, meta: None
-        es.iter_opencode_sessions = lambda home: [{
-            "session_id": "ses_oc_1", "created": 1000, "updated": 2000,
-            "directory": "P:\\proj", "source": "x.json", "doc": self.DOC,
-        }]
-        es.opencode_home = lambda cfg: Path("D:/nonexistent-oc")
         self.write_state(
             stage="enrolled", session_id="cloud-ses-1", session_token="tok-1",
             track="track1", opened_at="1970-01-01T00:00:00+00:00",
@@ -1212,64 +1661,55 @@ class TestFinishFlowOpenCode(_LocalServerTestCase):
         with urllib.request.urlopen(req) as resp:
             return json.loads(resp.read())
 
-    def test_finish_opencode_cleans_and_uploads(self):
-        state = self._post("/api/finish", {})
+    def _post_bytes(self, path, data: bytes, name="session.json"):
+        req = urllib.request.Request(
+            self.url(path), data=data,
+            headers={"X-Source-Name": name}, method="POST")
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read())
+
+    def _post_error(self, path, data: bytes, name="session.json"):
+        req = urllib.request.Request(
+            self.url(path), data=data,
+            headers={"X-Source-Name": name}, method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        payload = json.loads(cm.exception.read() or b"{}")
+        code = cm.exception.code
+        cm.exception.close()
+        return code, payload
+
+    def test_manual_json_cleans_previews_uploads(self):
+        out = self._post_bytes(
+            "/api/clean_export",
+            json.dumps(self.DOC, ensure_ascii=False).encode("utf-8"))
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["agent_session_id"], "ses_oc_1")
+        state = self._post("/api/upload_cleaned", {})
         self.assertEqual(state["stage"], "uploaded")
         self.assertEqual(state["agent_session_id"], "ses_oc_1")
-        self.assertEqual(state["export_method"], "opencode 会话文件")
         meta = json.loads(
             (es.PENDING_DIR / "08260001_cloud-ses-1.meta.json")
             .read_text(encoding="utf-8"))
         self.assertEqual(meta["agent"], "opencode")
         self.assertEqual(meta["agent_session_id"], "ses_oc_1")
         self.assertEqual(meta["export_file"], "08260001_cloud-ses-1.json")
+        self.assertIn("手动导出的会话文件", meta["export_method"])
         # 原始会话文件本地留存（不上传，仅清洗结果上传）
         self.assertTrue((es.PENDING_DIR / meta["export_file"]).exists())
         self.assertTrue((es.PENDING_DIR / meta["cleaned_jsonl"]).exists())
 
-    def test_finish_no_session_404_with_manual_hint(self):
-        es.iter_opencode_sessions = lambda home: []
-        data = json.dumps({}).encode("utf-8")
-        req = urllib.request.Request(
-            self.url("/api/finish"), data=data,
-            headers={"Content-Type": "application/json"}, method="POST")
-        with self.assertRaises(urllib.error.HTTPError) as cm:
-            urllib.request.urlopen(req)
-        self.assertEqual(cm.exception.code, 404)
-        payload = json.loads(cm.exception.read())
-        cm.exception.close()
-        self.assertEqual(payload["hint"], "manual")
-        self.assertIn("没找到你的作答记录", payload["error"])
-        self.assertNotIn("Traceback", payload["error"])
+    def test_clean_rejects_non_session_with_real_cleaner(self):
+        import cleaner as real_cleaner
+        es.load_cleaner = lambda: real_cleaner
+        code, payload = self._post_error(
+            "/api/clean_export", json.dumps({"hello": 1}).encode("utf-8"))
+        self.assertEqual(code, 500)
+        self.assertIn("整理你的作答记录时出了点问题", payload["error"])
 
-    def test_finish_manual_accepts_session_json(self):
-        state = self._post("/api/finish_manual", self.DOC)
-        self.assertEqual(state["stage"], "uploaded")
-        self.assertEqual(state["agent_session_id"], "ses_oc_1")
-        meta = json.loads(
-            (es.PENDING_DIR / "08260001_cloud-ses-1.meta.json")
-            .read_text(encoding="utf-8"))
-        self.assertEqual(meta["export_method"], "手动选择的会话文件")
-
-    def test_finish_manual_rejects_non_session(self):
-        req = urllib.request.Request(
-            self.url("/api/finish_manual"),
-            data=json.dumps({"hello": 1}).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST")
-        with self.assertRaises(urllib.error.HTTPError) as cm:
-            urllib.request.urlopen(req)
-        self.assertEqual(cm.exception.code, 400)
-        self.assertIn("不是 opencode 会话", json.loads(cm.exception.read())["error"])
-        cm.exception.close()
-
-    def test_finish_manual_garbage_400(self):
-        req = urllib.request.Request(
-            self.url("/api/finish_manual"), data=b"not json",
-            headers={"Content-Type": "application/json"}, method="POST")
-        with self.assertRaises(urllib.error.HTTPError) as cm:
-            urllib.request.urlopen(req)
-        self.assertEqual(cm.exception.code, 400)
-        cm.exception.close()
+    def test_clean_empty_body_400(self):
+        code, _ = self._post_error("/api/clean_export", b"")
+        self.assertEqual(code, 400)
 
 
 class TestOpenCodeDbDiscovery(unittest.TestCase):
@@ -1500,107 +1940,6 @@ class TestOpenCodeExportChannel(unittest.TestCase):
         self.assertEqual(es.find_opencode_bin(), str(exe))
 
 
-class TestFinishFlowOpenCodeDb(_LocalServerTestCase):
-    """交卷走 opencode.db 通道端到端：export 优先，失败降级 db 副本拼装，
-    db 无候选再降级 JSON 目录扫描。"""
-
-    EXPORT_DOC = {
-        "info": {"id": "ses_db_1", "directory": "P:\\workdir",
-                 "time": {"created": 1500, "updated": 2000}},
-        "messages": [],
-    }
-
-    def setUp(self):
-        self.install_tmp_dirs()
-        self.tmp_home = tempfile.TemporaryDirectory()
-        self.home = Path(self.tmp_home.name)
-        _make_opencode_db(self.home, [{
-            "id": "ses_db_1", "directory": "P:/workdir",
-            "time_created": 1500, "time_updated": 2000,
-            "messages": [{
-                "id": "msg_d1", "time_created": 1600,
-                "data": {"role": "user", "time": {"created": 1600}},
-                "parts": [{"id": "prt_d1",
-                           "data": {"type": "text", "text": "db 作答内容"}}],
-            }],
-        }])
-        self.orig = {name: getattr(es, name) for name in
-                     ("upload_session", "iter_opencode_sessions",
-                      "opencode_home", "load_cleaner",
-                      "opencode_export_session")}
-        es.load_cleaner = lambda: _make_fake_cleaner(with_session=True)
-        es.upload_session = lambda cfg, meta: None
-        es.opencode_home = lambda cfg: self.home
-        es.opencode_export_session = lambda cfg, sid, out: False
-        es.iter_opencode_sessions = lambda home: []
-        self.write_state(
-            stage="enrolled", session_id="cloud-ses-1", session_token="tok-1",
-            track="track1", opened_at="1970-01-01T00:00:00+00:00",
-            agent="opencode")
-        self.start_server()
-        self.httpd.cfg = dict(self.httpd.cfg, agent="opencode")
-
-    def tearDown(self):
-        self.stop_server()
-        for name, val in self.orig.items():
-            setattr(es, name, val)
-        self.restore_dirs()
-        self.tmp_home.cleanup()
-
-    def _post(self, path, body):
-        data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(
-            self.url(path), data=data,
-            headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read())
-
-    def test_finish_prefers_db_export_channel(self):
-        def fake_export(cfg, sid, out_path):
-            self.assertEqual(sid, "ses_db_1")
-            out_path.write_text(
-                json.dumps(self.EXPORT_DOC, ensure_ascii=False),
-                encoding="utf-8")
-            return True
-
-        es.opencode_export_session = fake_export
-        state = self._post("/api/finish", {})
-        self.assertEqual(state["stage"], "uploaded")
-        self.assertEqual(state["agent_session_id"], "ses_db_1")
-        self.assertEqual(state["export_method"], "opencode export")
-        meta = json.loads(
-            (es.PENDING_DIR / "08260001_cloud-ses-1.meta.json")
-            .read_text(encoding="utf-8"))
-        self.assertEqual(meta["export_method"], "opencode export")
-        self.assertEqual(meta["agent_session_id"], "ses_db_1")
-
-    def test_finish_db_copy_fallback_when_export_fails(self):
-        state = self._post("/api/finish", {})
-        self.assertEqual(state["stage"], "uploaded")
-        self.assertEqual(state["agent_session_id"], "ses_db_1")
-        self.assertEqual(state["export_method"], "opencode 数据库副本")
-        raw = json.loads(
-            (es.PENDING_DIR / "08260001_cloud-ses-1.json")
-            .read_text(encoding="utf-8"))
-        self.assertEqual(raw["info"]["id"], "ses_db_1")
-        self.assertEqual(raw["messages"][0]["info"]["role"], "user")
-        self.assertEqual(raw["messages"][0]["parts"][0]["text"], "db 作答内容")
-
-    def test_finish_empty_db_falls_to_json_scan_then_404(self):
-        (self.home / "opencode.db").unlink()
-        req = urllib.request.Request(
-            self.url("/api/finish"), data=json.dumps({}).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST")
-        with self.assertRaises(urllib.error.HTTPError) as cm:
-            urllib.request.urlopen(req)
-        self.assertEqual(cm.exception.code, 404)
-        payload = json.loads(cm.exception.read())
-        cm.exception.close()
-        self.assertEqual(payload["hint"], "manual")
-        self.assertIn("没找到你的作答记录", payload["error"])
-        self.assertNotIn("Traceback", payload["error"])
-
-
 class TestPageCopyM11(unittest.TestCase):
     """小白化页面文案钉死：声明条 / 大按钮 / 兜底入口。"""
 
@@ -1613,18 +1952,22 @@ class TestPageCopyM11(unittest.TestCase):
 
     def test_big_buttons(self):
         self.assertIn("我已理解，开始在 AI 工具里作答", es.PAGE)
-        self.assertIn("清洗并上传我的作答", es.PAGE)
+        self.assertIn("确认上传", es.PAGE)
         self.assertIn("重试上传", es.PAGE)
 
-    def test_manual_fallback_input(self):
-        self.assertIn('id="manual-session-file"', es.PAGE)
+    def test_manual_export_inputs(self):
+        # M12：手动导出为主——每题一格的文件选择（json/zip）+ 粘贴 JSON 兜底
+        self.assertIn('id="slot-list"', es.PAGE)
+        self.assertIn('file.id = "slot-file-" + i;', es.PAGE)
+        self.assertIn('ta.id = "slot-paste-" + i;', es.PAGE)
+        self.assertIn('file.accept = ".json,.zip";', es.PAGE)
 
     def test_finish_error_copy_is_plain(self):
-        # 服务端「没找到会话」的 404 文案是白话（不出现 traceback/术语）
+        # 服务端「没找到会话」的扫描 404 文案是白话（不出现 traceback/术语）
         import inspect
         src = inspect.getsource(es)
         self.assertIn("没找到你的作答记录", src)
-        self.assertIn("手动选择会话文件", src)
+        self.assertIn("在本题工作区帮我找", es.PAGE)
 
     def test_opencode_zen_declaration(self):
         # R1 结论：免费模型是 OpenCode Zen 限时型号，仍需注册登录，不许宣称免登录

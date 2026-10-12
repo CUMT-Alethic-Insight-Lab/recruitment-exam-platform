@@ -37,6 +37,23 @@ FILE_KINDS = {
     "cleaned_md": "cleaned.md",
     "attachment": "attachment.zip",
 }
+# 逐题提交的槽位件：cleaned_jsonl_q{N} / cleaned_md_q{N} → cleaned_q{N}.jsonl/.md
+KIND_RE = re.compile(r"^(cleaned_jsonl|cleaned_md|attachment)(?:_q(\d+))?$")
+
+
+def kind_to_filename(kind: str) -> str | None:
+    """接口 kind → 落盘文件名；不认识的 kind 返回 None。attachment 不带槽位后缀。"""
+    m = KIND_RE.fullmatch(kind)
+    if not m:
+        return None
+    base, q = m.group(1), m.group(2)
+    if base == "attachment":
+        return "attachment.zip" if q is None else None
+    stem = FILE_KINDS[base]
+    if q is None:
+        return stem
+    name, dot, ext = stem.partition(".")
+    return f"{name}_q{q}{dot}{ext}"
 CONTENT_TYPES = {
     "cleaned.jsonl": "text/plain; charset=utf-8",
     "cleaned.md": "text/markdown; charset=utf-8",
@@ -46,6 +63,8 @@ TRACK_LABELS = {
     "track1": "轨迹一（题库自选）",
     "track2": "轨迹二（随机抽题）",
     "track3": "轨迹三（自由创作）",
+    "selected": "题库自选",
+    "project": "自有项目",
 }
 
 ROOT = DEFAULT_ROOT
@@ -105,6 +124,29 @@ def _iter_sessions() -> list[dict]:
     return items
 
 
+def _file_link_label(kind: str) -> str:
+    """首页文件链接文字：逐题槽位件带题号（第 N 题轨迹 / 第 N 题清洗报告）。"""
+    m = KIND_RE.fullmatch(kind)
+    if not m:
+        return kind
+    base, q = m.group(1), m.group(2)
+    prefix = f"第 {int(q) + 1} 题" if q is not None else ""
+    if base == "cleaned_jsonl":
+        return prefix + "轨迹 jsonl"
+    if base == "cleaned_md":
+        return prefix + "清洗报告"
+    return "附件 zip"
+
+
+def _sorted_file_kinds(files: dict) -> list[str]:
+    def key(k: str):
+        m = KIND_RE.fullmatch(k)
+        q = int(m.group(2)) if m and m.group(2) is not None else -1
+        order = {"cleaned_jsonl": 0, "cleaned_md": 1, "attachment": 2}
+        return (q, order.get(m.group(1), 9) if m else 9)
+    return sorted(files, key=key)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "AlethicSessionReceiver/1.0"
 
@@ -156,7 +198,8 @@ class Handler(BaseHTTPRequestHandler):
         parts = path.strip("/").split("/")
         # /api/sessions/{cid}/{sid}/files/{kind}
         if (len(parts) == 6 and parts[0] == "api" and parts[1] == "sessions"
-                and parts[4] == "files" and parts[5] in FILE_KINDS):
+                and parts[4] == "files"
+                and kind_to_filename(parts[5]) is not None):
             return self._send_file(parts[2], parts[3], parts[5])
         return self._error(404, "接口不存在")
 
@@ -172,7 +215,8 @@ class Handler(BaseHTTPRequestHandler):
         tail = parts[4:]
         if tail == ["begin"]:
             return self._begin(sdir)
-        if len(tail) == 2 and tail[0] == "file" and tail[1] in FILE_KINDS:
+        if len(tail) == 2 and tail[0] == "file" \
+                and kind_to_filename(tail[1]) is not None:
             return self._receive_file(sdir, tail[1])
         if tail == ["done"]:
             return self._done(sdir)
@@ -202,13 +246,18 @@ class Handler(BaseHTTPRequestHandler):
         }
         with _LOCK:
             sdir.mkdir(parents=True, exist_ok=True)
+            # 逐题上传每题都会 begin 一次：保留已收到的文件记录，只刷新元信息
+            old = _load_json(sdir / "info.json") or {}
+            info["files"] = old.get("files") or {}
             # 重传场景：重新进入接收态
             (sdir / "manifest.json").unlink(missing_ok=True)
             _save_info(sdir, info)
         return self._send_json({"ok": True})
 
     def _receive_file(self, sdir: Path, kind: str):
-        stored_name = FILE_KINDS[kind]
+        stored_name = kind_to_filename(kind)
+        if stored_name is None:
+            return self._error(400, "无效文件类型")
         info = _load_json(sdir / "info.json")
         if info is None:
             return self._error(404, "请先调用 begin 注册会话")
@@ -242,7 +291,8 @@ class Handler(BaseHTTPRequestHandler):
         info = _load_json(sdir / "info.json")
         if info is None:
             return self._error(404, "请先调用 begin 注册会话")
-        if "cleaned_jsonl" not in (info.get("files") or {}):
+        files = info.get("files") or {}
+        if not any(k.startswith("cleaned_jsonl") for k in files):
             return self._error(400, "缺少 cleaned_jsonl，不能标记完成")
         if payload.get("repo_url"):
             info["repo_url"] = str(payload["repo_url"])
@@ -256,17 +306,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def _send_file(self, cid: str, sid: str, kind: str):
         sdir = _session_dir(cid, sid)
-        if sdir is None:
+        stored = kind_to_filename(kind)
+        if sdir is None or stored is None:
             return self._error(400, "届次或会话 ID 格式不合法")
-        path = sdir / FILE_KINDS[kind]
+        path = sdir / stored
         if not path.is_file():
             return self._error(404, "文件不存在")
         data = path.read_bytes()
         extra = {}
         query = self.path.split("?", 1)[1] if "?" in self.path else ""
         if "dl=1" in query:
-            extra["Content-Disposition"] = f'attachment; filename="{FILE_KINDS[kind]}"'
-        self._send(200, data, CONTENT_TYPES[FILE_KINDS[kind]], extra)
+            extra["Content-Disposition"] = f'attachment; filename="{stored}"'
+        ctype = CONTENT_TYPES.get(stored) or (
+            "text/plain; charset=utf-8" if stored.endswith(".jsonl")
+            else "text/markdown; charset=utf-8" if stored.endswith(".md")
+            else "application/zip")
+        self._send(200, data, ctype, extra)
 
     def _send_index(self):
         sessions = _iter_sessions()
@@ -276,12 +331,10 @@ class Handler(BaseHTTPRequestHandler):
             files = s["files"]
             links = []
             base = f"/api/sessions/{s['cid']}/{s['sid']}/files"
-            if "cleaned_jsonl" in files:
-                links.append(f'<a href="{base}/cleaned_jsonl">轨迹 jsonl</a>')
-            if "cleaned_md" in files:
-                links.append(f'<a href="{base}/cleaned_md">清洗报告</a>')
-            if "attachment" in files:
-                links.append(f'<a href="{base}/attachment?dl=1">附件 zip</a>')
+            for kind in _sorted_file_kinds(files):
+                dl = "?dl=1" if kind == "attachment" else ""
+                links.append(f'<a href="{base}/{kind}{dl}">'
+                             f'{html.escape(_file_link_label(kind))}</a>')
             status = ('<span style="color:#15803d">已收齐</span>' if s["complete"]
                       else '<span style="color:#b45309">接收中</span>')
             repo = (f'<a href="{html.escape(str(info.get("repo_url")))}" target="_blank"'

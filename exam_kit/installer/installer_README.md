@@ -66,7 +66,7 @@ REG_EXPAND_SZ，ctypes 广播 WM_SETTINGCHANGE，绝不覆盖已有条目）→ 
 ```bat
 pip install pyinstaller
 :: 1) 组装 payload\：payload\kit\ ← exam_kit 根目录 kit 文件；
-::    payload\ 下放 payload_cache 的 6 个组件包
+::    payload\ 下放 payload_cache 的 7 个组件包
 :: 2)
 pyinstaller installer.spec --noconfirm
 :: 产物 dist\招新考试系统-安装程序.exe（onefile，约 222MB）
@@ -85,10 +85,10 @@ python build_installer.py
 
 - **前置**：维护机需 `pip install pyinstaller`（脚本检测到缺失会自动装）；联网只用于
   装依赖，目标机全程离线。
-- **payload_cache 校验**：脚本对 6 个离线包逐一核对 SHA256（与 components_spec.json），
+- **payload_cache 校验**：脚本对 7 个离线包逐一核对 SHA256（与 components_spec.json），
   缺失/不符时**不自动下载**，打印 COMPONENTS.md 里的官方 URL 手动下载重放即可。
 - **payload/ 组装**：`payload\kit\` ← exam_kit 根目录 kit 文件（清单从 installer_app.py
-  的 REQUIRED/OPTIONAL_KIT_FILES 解析，自动对齐）+ 6 个离线包原样 + components_spec.json。
+  的 REQUIRED/OPTIONAL_KIT_FILES 解析，自动对齐）+ 7 个离线包原样 + components_spec.json。
 - **打包**：`pyinstaller installer.spec --noconfirm`，产物 `dist\招新考试系统-安装程序.exe`。
 
 实测记录（2026-09-05，本机 Python 3.14 + PyInstaller 6.19.0）：
