@@ -2,10 +2,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+import asyncio
+
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, config, db, maintenance
+from . import archive, auth, config, db, maintenance
 from .routes import accounts, applications, auth as auth_routes, campaigns, exam, interview, questions, review, uploads
 from .routes import internal as internal_routes
 
@@ -89,6 +91,21 @@ def seed_admin() -> None:
         print(f"[init] 已播种管理员账号 {username}（初始密码为学号，请尽快修改）")
 
 
+ARCHIVE_QUEUE_INTERVAL_SEC = 600
+
+
+async def _archive_queue_worker() -> None:
+    """exam-archive 待推队列补推：每 10min 扫一次 data/archive_queue.jsonl。"""
+    while True:
+        await asyncio.sleep(ARCHIVE_QUEUE_INTERVAL_SEC)
+        try:
+            summary = await asyncio.to_thread(archive.flush_queue)
+            if summary.get("pushed"):
+                print(f"[archive] 待推队列补推成功，清空 {summary['cleared']} 条")
+        except Exception as exc:
+            print(f"[WARN] exam-archive 队列补推异常: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
@@ -99,7 +116,16 @@ async def lifespan(app: FastAPI):
             print(f"[maintenance] 启动回收过期批次: {', '.join(summary['purged'])}")
     except Exception as exc:
         print(f"[WARN] 过期批次回收失败（不影响启动）: {exc}")
+    worker = None
+    if config.ARCHIVE_ENABLED and not config.IS_EDGE:
+        worker = asyncio.create_task(_archive_queue_worker())
     yield
+    if worker is not None:
+        worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Alethic Insight 招新平台", version="0.1.0", lifespan=lifespan)

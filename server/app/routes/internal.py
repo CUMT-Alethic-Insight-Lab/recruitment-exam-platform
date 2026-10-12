@@ -20,7 +20,7 @@ from pathlib import Path
 from fastapi import APIRouter, Header, HTTPException, Request
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from .. import config, db, submission
+from .. import archive, config, db, submission
 from .campaigns import get_campaign_or_404
 
 router = APIRouter(prefix="/api/internal", tags=["internal"])
@@ -68,6 +68,7 @@ async def ingest_staged(request: Request,
     except ValueError:
         raise HTTPException(status_code=400, detail="slot 非法") from None
     results = []
+    any_new = False
     with db.connection() as conn:
         get_campaign_or_404(conn, cid)
         row = conn.execute(
@@ -133,6 +134,9 @@ async def ingest_staged(request: Request,
                 cleaned_name=cleaned_name, repo_url=repo_url or None,
                 attachment_path=attachment_path, file_hashes=file_hashes,
                 source="staged")
+            any_new = any_new or is_new
             results.append({"slot": slot,
                             "status": "ingested" if is_new else "deduped"})
+    if any_new:
+        archive.trigger(sid)
     return {"status": "ok", "session_id": sid, "results": results}

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Respo
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from .. import cleaned_report, config, db, staging, submission
+from .. import archive, cleaned_report, config, db, staging, submission
 from ..auth import require_admin
 from ..constants import MAX_ATTACHMENT_BYTES  # noqa: F401  兼容既有 import 路径
 from ..schemas import ExamSessionOut
@@ -147,6 +147,8 @@ def upload_session(
             cleaned_name=cleaned_name, repo_url=repo_url or None,
             attachment_path=attachment_path, file_hashes=file_hashes,
             source="direct")
+    if is_new:
+        archive.trigger(session_id)
     return _row_to_out(updated)
 
 
@@ -182,6 +184,8 @@ def mark_lan_uploaded(
         # P2P 路径同样过收敛点（无文件哈希，台账自然不登记）
         updated, is_new = submission.commit_uploaded(
             conn, row, repo_url=body.repo_url or None, source="lan", lan=True)
+    if is_new:
+        archive.trigger(sid)
     return _row_to_out(updated)
 
 

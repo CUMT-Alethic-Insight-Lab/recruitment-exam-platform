@@ -55,6 +55,14 @@ STAGING_SECRET = os.environ.get("STAGING_SECRET", "")
 CF_ACCESS_CLIENT_ID = os.environ.get("CF_ACCESS_CLIENT_ID", "")
 CF_ACCESS_CLIENT_SECRET = os.environ.get("CF_ACCESS_CLIENT_SECRET", "")
 
+# exam-archive 即时备份（M22，仅 authoritative）：会话转 uploaded 后把清洗件
+# md / 仓库链接 / 附件归档进 org 私有仓的本地克隆并 push。默认关，缺 env 静默跳过；
+# push 失败追加 data/archive_queue.jsonl，由 lifespan 后台任务定期补推。
+ARCHIVE_ENABLED = os.environ.get("ARCHIVE_ENABLED", "0").strip().lower() \
+    in ("1", "true", "yes", "on")
+ARCHIVE_REPO_DIR = os.environ.get("ARCHIVE_REPO_DIR", "")
+ARCHIVE_GITHUB_TOKEN = os.environ.get("ARCHIVE_GITHUB_TOKEN", "")
+
 
 def effective_admin_path() -> str:
     return ADMIN_PUBLIC_PATH or (PUBLIC_PREFIX + "/admin")

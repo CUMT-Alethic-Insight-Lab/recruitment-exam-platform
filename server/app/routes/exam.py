@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from .. import auth, config, db, staging
+from .. import archive, auth, config, db, staging
 from ..auth import require_admin, require_applicant
 from ..constants import EXAM_TRACKS, MAX_ATTACHMENT_BYTES
 from ..db import DEFAULT_EXAM_CONFIG
@@ -536,4 +536,5 @@ def submit_project(cid: str, repo_url: str = Form(...),
             (now, cid, student_id),
         )
         row = get_session_or_404(conn, sid)
-        return _row_to_out(row)
+    archive.trigger(sid)
+    return _row_to_out(row)
