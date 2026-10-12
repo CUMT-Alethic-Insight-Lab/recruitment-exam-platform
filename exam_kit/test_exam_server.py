@@ -2058,6 +2058,183 @@ class TestOpenCodeExportChannel(unittest.TestCase):
         self.assertEqual(es.find_opencode_bin(), str(exe))
 
 
+class _FakeUrlopenResp:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return b'{"ok": true}'
+
+
+class TestCloudflareTransport(unittest.TestCase):
+    """CF 前置域名（alethicinsight.com）传输加固：只走 curl，网络失败退避重试，
+    绝不静默回退 urllib；CF 拦截特征映射白话；每次尝试的传输方式与失败原因记日志。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.log_path = Path(self.tmp.name) / "考试系统日志.txt"
+        self.orig_log = es.LOG_FILE
+        es.LOG_FILE = self.log_path
+
+    def tearDown(self):
+        es.LOG_FILE = self.orig_log
+        self.tmp.cleanup()
+
+    @staticmethod
+    def _cf_cfg(**extra):
+        cfg = dict(es.DEFAULT_CONFIG,
+                   cloud_base="https://alethicinsight.com/recruitment")
+        cfg.update(extra)
+        return cfg
+
+    def _log_text(self):
+        return (self.log_path.read_text(encoding="utf-8")
+                if self.log_path.exists() else "")
+
+    def test_cf_fronted_host_detection(self):
+        self.assertTrue(es._is_cf_fronted("https://alethicinsight.com/recruitment"))
+        self.assertTrue(es._is_cf_fronted("https://headscale.alethicinsight.com/"))
+        self.assertFalse(es._is_cf_fronted("http://127.0.0.1:8899/api"))
+        self.assertFalse(es._is_cf_fronted("http://100.64.0.5:8897/api"))  # tailnet 直连
+        self.assertFalse(es._is_cf_fronted("https://notalethicinsight.com/"))
+
+    def test_cf_target_never_falls_back_to_urllib(self):
+        with mock.patch.object(es, "_curl_exe", return_value=None), \
+                mock.patch.object(
+                    es.urllib.request, "urlopen",
+                    side_effect=AssertionError("CF 目标不得回退 urllib")) as uo:
+            with self.assertRaises(es.CloudError) as cm:
+                es.cloud_request(self._cf_cfg(), "GET", "/api/auth/salt")
+        self.assertFalse(uo.called)
+        self.assertTrue(cm.exception.friendly)
+        self.assertIn("curl", str(cm.exception))
+        self.assertIn("pending_upload", str(cm.exception))
+
+    def test_non_cf_target_uses_urllib_when_curl_missing(self):
+        # 非 CF 目标（考场局域网/tailnet 直连）保留 urllib 兜底
+        with mock.patch.object(es, "_curl_exe", return_value=None), \
+                mock.patch.object(es.urllib.request, "urlopen",
+                                  return_value=_FakeUrlopenResp()) as uo:
+            code, out = es.cloud_request(
+                dict(es.DEFAULT_CONFIG, cloud_base="http://192.168.1.10:8897"),
+                "GET", "/api/health")
+        self.assertEqual((code, out), (200, {"ok": True}))
+        self.assertTrue(uo.called)
+
+    def test_explicit_env_urllib_allowed_even_for_cf(self):
+        with mock.patch.dict(os.environ, {"ALE_THIC_HTTP_TRANSPORT": "urllib"}), \
+                mock.patch.object(es.urllib.request, "urlopen",
+                                  return_value=_FakeUrlopenResp()) as uo:
+            code, out = es.cloud_request(self._cf_cfg(), "GET", "/api/auth/salt")
+        self.assertEqual((code, out), (200, {"ok": True}))
+        self.assertTrue(uo.called)
+
+    def test_cf_curl_failures_retry_with_backoff_and_log(self):
+        calls = []
+
+        def boom(argv, input_data=None, timeout=60):
+            calls.append(list(argv))
+            raise es.CloudError("curl: (28) Connection timed out")
+
+        sleeps = []
+        with mock.patch.object(es, "_curl_exe", return_value="C:/fake/curl.exe"), \
+                mock.patch.object(es, "_curl_exec", side_effect=boom), \
+                mock.patch.object(es.time, "sleep",
+                                  side_effect=lambda s: sleeps.append(s)):
+            with self.assertRaises(es.CloudError) as cm:
+                es.cloud_request(self._cf_cfg(), "GET", "/api/auth/salt")
+        self.assertEqual(len(calls), es.CF_CURL_RETRIES)
+        self.assertEqual(sleeps, list(es.CF_CURL_BACKOFF))
+        self.assertIn("无法连接", str(cm.exception))
+        log = self._log_text()
+        self.assertIn("传输=curl", log)
+        self.assertIn("curl: (28)", log)
+
+    def test_cf_block_tls_signature_friendly_no_retry(self):
+        calls = []
+
+        def blocked(argv, input_data=None, timeout=60):
+            calls.append(1)
+            raise es.CloudError(
+                "curl: (35) OpenSSL SSL_read: UNEXPECTED_EOF_WHILE_READING")
+
+        with mock.patch.object(es, "_curl_exe", return_value="C:/fake/curl.exe"), \
+                mock.patch.object(es, "_curl_exec", side_effect=blocked):
+            with self.assertRaises(es.CloudError) as cm:
+                es.cloud_request(self._cf_cfg(), "GET", "/api/auth/salt")
+        self.assertEqual(len(calls), 1)  # CF 拦截特征：重试无意义，直接白话
+        self.assertTrue(cm.exception.friendly)
+        self.assertIn("换个网络", str(cm.exception))
+        self.assertIn("pending_upload", str(cm.exception))
+        # 白话直通 _friendly_upload_error（页面原样展示）
+        self.assertEqual(es._friendly_upload_error(cm.exception),
+                         str(cm.exception))
+
+    def test_cf_block_403_challenge_page_friendly(self):
+        def page(argv, input_data=None, timeout=60):
+            return 403, b"<html><title>Attention Required!</title> cf-ray: 8f00</html>"
+
+        with mock.patch.object(es, "_curl_exe", return_value="C:/fake/curl.exe"), \
+                mock.patch.object(es, "_curl_exec", side_effect=page):
+            with self.assertRaises(es.CloudError) as cm:
+                es.cloud_request(self._cf_cfg(), "GET", "/api/x")
+        self.assertTrue(cm.exception.friendly)
+        self.assertIn("Cloudflare", self._log_text())
+
+    def test_cf_retry_success_logged(self):
+        calls = []
+
+        def flaky(argv, input_data=None, timeout=60):
+            calls.append(1)
+            if len(calls) == 1:
+                raise es.CloudError("curl: (28) timeout")
+            return 200, b'{"ok": true}'
+
+        with mock.patch.object(es, "_curl_exe", return_value="C:/fake/curl.exe"), \
+                mock.patch.object(es, "_curl_exec", side_effect=flaky), \
+                mock.patch.object(es.time, "sleep", lambda s: None):
+            code, out = es.cloud_request(self._cf_cfg(), "GET", "/api/x")
+        self.assertEqual((code, out), (200, {"ok": True}))
+        self.assertEqual(len(calls), 2)
+        self.assertIn("第 2 次重试", self._log_text())
+
+    def test_upload_session_cf_retries_and_never_urllib(self):
+        # 交卷上传通道同样：CF 目标 curl 退避重试，绝不回退 urllib
+        orig_pending = es.PENDING_DIR
+        es.PENDING_DIR = Path(self.tmp.name) / "pending_upload"
+        (es.PENDING_DIR / "s1").mkdir(parents=True)
+        (es.PENDING_DIR / "s1" / "cleaned.jsonl").write_bytes(b"{}")
+        calls = []
+
+        def boom(argv, input_data=None, timeout=60):
+            calls.append(1)
+            raise es.CloudError("curl: (28) timeout")
+
+        try:
+            with mock.patch.object(es, "_curl_exe",
+                                   return_value="C:/fake/curl.exe"), \
+                    mock.patch.object(es, "_curl_exec", side_effect=boom), \
+                    mock.patch.object(es.time, "sleep", lambda s: None), \
+                    mock.patch.object(
+                        es.urllib.request, "urlopen",
+                        side_effect=AssertionError("CF 目标不得回退 urllib")):
+                with self.assertRaises(es.CloudError) as cm:
+                    es.upload_session(self._cf_cfg(p2p_enabled=False), {
+                        "session_id": "s1", "session_token": "t",
+                        "student_id": "08260001",
+                        "cleaned_jsonl": "s1/cleaned.jsonl",
+                    })
+        finally:
+            es.PENDING_DIR = orig_pending
+        self.assertEqual(len(calls), es.CF_CURL_RETRIES)
+        self.assertIn("无法连接", str(cm.exception))
+
+
 class TestPageCopyM11(unittest.TestCase):
     """小白化页面文案钉死：声明条 / 大按钮 / 兜底入口。"""
 

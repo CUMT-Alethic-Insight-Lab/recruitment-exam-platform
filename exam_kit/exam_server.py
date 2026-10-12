@@ -253,10 +253,12 @@ def compute_client_hash(password: str, salt: str) -> str:
 
 
 class CloudError(Exception):
-    def __init__(self, message: str, status: int = 0, detail=None):
+    def __init__(self, message: str, status: int = 0, detail=None,
+                 friendly: bool = False):
         super().__init__(message)
         self.status = status
         self.detail = detail
+        self.friendly = friendly  # True = 文案已是白话，页面可直接展示
 
 
 class SessionNotFound(Exception):
@@ -265,6 +267,8 @@ class SessionNotFound(Exception):
 
 def _friendly_upload_error(exc: CloudError) -> str:
     """把上传失败翻译成考生能懂的白话（页面不出现术语/堆栈）。"""
+    if getattr(exc, "friendly", False):
+        return str(exc)  # 已是白话（如 CF 拦截提示），直接展示
     if exc.status in (0, None) or "无法连接" in str(exc):
         return ("网络不通，没能上传到云端。你的作答已安全保存在本机的"
                 " pending_upload 文件夹里——恢复网络后点「重试上传」即可；"
@@ -276,8 +280,37 @@ def _friendly_upload_error(exc: CloudError) -> str:
 
 # ---------- HTTP 传输层 ----------
 # Cloudflare 按 TLS 指纹拦 python-urllib（实测握手即断：SSL: UNEXPECTED_EOF_WHILE_READING），
-# 但透过 curl.exe（Windows 自带，Schannel 栈）正常。因此云端请求默认走 curl，urllib 兜底，
-# 可用环境变量 ALE_THIC_HTTP_TRANSPORT=urllib|curl 强制指定（测试用）。
+# 但透过 curl.exe（Windows 自带，Schannel 栈）正常。因此 CF 前置域名（alethicinsight.com）
+# 只走 curl：网络类失败退避重试（_curl_exec_cf），绝不静默回退 urllib；urllib 兜底仅限
+# 非 CF 目标（考场局域网/tailnet 直连）或显式 ALE_THIC_HTTP_TRANSPORT=urllib|curl
+# 强制指定（测试用）。
+
+CF_FRONTED_HOSTS = ("alethicinsight.com",)
+CF_CURL_RETRIES = 3            # CF 前置目标的 curl 尝试次数（含首次，退避重试）
+CF_CURL_BACKOFF = (2.0, 5.0)   # 第 1/2 次失败后的退避秒数
+# CF 拦截特征：TLS 指纹断连 / 挑战页文案（命中即白话报错，重试无意义）
+CF_BLOCK_MARKERS = ("unexpected_eof_while_reading", "cf-ray", "browser signature")
+
+
+def _is_cf_fronted(url: str) -> bool:
+    """url 是否指向 CF 前置域名（云端 alethicinsight.com 及其子域）。"""
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    return any(host == h or host.endswith("." + h) for h in CF_FRONTED_HOSTS)
+
+
+def _cf_block_detected(code: int, raw: bytes, err: str) -> bool:
+    """识别 CF 拦截特征：UNEXPECTED_EOF_WHILE_READING（TLS 指纹断连）、
+    403/503 挑战页里的 cf-ray / browser signature 文案。"""
+    text = (err or "").lower()
+    if raw:
+        text += " " + bytes(raw[:8192]).decode("utf-8", "replace").lower()
+    return any(m in text for m in CF_BLOCK_MARKERS)
+
+
+def _cf_blocked_message() -> str:
+    return ("网络拦住了到考试云端的安全连接（校园网/公司网/代理常见）。"
+            "你的作答已安全保存在本机 pending_upload 文件夹，不会丢失；"
+            "建议换个网络（如手机热点）后点「重试上传」，多次失败请联系组织者。")
 
 def _curl_exe() -> str | None:
     cands = []
@@ -292,10 +325,12 @@ def _curl_exe() -> str | None:
     return None
 
 
-def _http_transport() -> str:
+def _http_transport(url: str = "") -> str:
     force = os.environ.get("ALE_THIC_HTTP_TRANSPORT", "").strip().lower()
     if force in ("curl", "urllib"):
         return force
+    if url and _is_cf_fronted(url):
+        return "curl"  # CF 前置只认 Schannel 栈，禁止 urllib 兜底
     return "curl" if _curl_exe() else "urllib"
 
 
@@ -333,6 +368,35 @@ def _curl_exec(argv: list[str], input_data: bytes | None = None,
             pass
 
 
+def _curl_exec_cf(argv: list[str], input_data: bytes | None = None,
+                  timeout: float = 60, url: str = "") -> tuple[int, bytes]:
+    """CF 前置目标的 curl 调用：网络类失败按 CF_CURL_BACKOFF 退避重试
+    （共 CF_CURL_RETRIES 次），绝不回退 urllib（TLS 指纹必被拦）；命中 CF 拦截
+    特征直接白话报错（重试无意义）。每次尝试的传输方式与失败原因写日志。"""
+    last: CloudError | None = None
+    for attempt in range(1, CF_CURL_RETRIES + 1):
+        try:
+            code, raw = _curl_exec(argv, input_data=input_data, timeout=timeout)
+        except CloudError as exc:
+            last = exc
+            _log(f"请求失败（传输=curl，第 {attempt}/{CF_CURL_RETRIES} 次）{url}: {exc}")
+            if _cf_block_detected(0, b"", str(exc)):
+                raise CloudError(_cf_blocked_message(), status=0,
+                                 friendly=True) from None
+            if attempt < CF_CURL_RETRIES:
+                time.sleep(CF_CURL_BACKOFF[min(attempt - 1, len(CF_CURL_BACKOFF) - 1)])
+            continue
+        if _cf_block_detected(code, raw, ""):
+            _log(f"请求返回 HTTP {code}（传输=curl，第 {attempt} 次）{url}，"
+                 "特征疑似 Cloudflare 拦截")
+            raise CloudError(_cf_blocked_message(), status=code,
+                             friendly=True) from None
+        if attempt > 1:
+            _log(f"请求成功（传输=curl，第 {attempt} 次重试）{url}")
+        return code, raw
+    raise CloudError(f"无法连接云端（已用 curl 重试 {CF_CURL_RETRIES} 次）：{last}")
+
+
 def _parse_cloud_error(status: int, raw: bytes) -> CloudError:
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -367,27 +431,38 @@ def cloud_request(cfg: dict, method: str, path: str, body: dict | None = None,
         data = json.dumps(body).encode("utf-8")
     timeout = (max(float(cfg["http_timeout"]), 300) if is_multipart
                else cfg["http_timeout"])
-    if _http_transport() == "curl":
-        argv = [ _curl_exe() ]
+    transport = _http_transport(url)
+    if transport == "curl":
+        exe = _curl_exe()
+        if not exe:
+            raise CloudError(
+                "这台电脑缺少系统自带的 curl 组件，无法连接考试云端。"
+                "你的作答已安全保存在本机 pending_upload 文件夹，不会丢失；"
+                "请联系组织者处理。", status=0, friendly=True)
+        argv = [exe]
         if session_token:
             argv += ["-H", f"X-Session-Token: {session_token}"]
         if bearer:
             argv += ["-H", f"Authorization: Bearer {bearer}"]
         argv += ["-H", "Accept: application/json"]
+        payload = None
         if is_multipart:
             for name, value in (multipart_fields or {}).items():
                 argv += ["-F", f"{name}={value}"]
             for name, fpath in (multipart_files or []):
                 argv += ["-F", f"{name}=@{fpath};type=application/octet-stream"]
             argv += ["-X", method, url]
-            code, raw = _curl_exec(argv, timeout=timeout)
         elif data is not None:
             argv += ["-H", "Content-Type: application/json", "-X", method,
                      "--data-binary", "@-", url]
-            code, raw = _curl_exec(argv, input_data=data, timeout=timeout)
+            payload = data
         else:
             argv += ["-X", method, url]
-            code, raw = _curl_exec(argv, timeout=timeout)
+        if _is_cf_fronted(url):  # CF 前置：退避重试，绝不回退 urllib
+            code, raw = _curl_exec_cf(argv, input_data=payload,
+                                      timeout=timeout, url=url)
+        else:
+            code, raw = _curl_exec(argv, input_data=payload, timeout=timeout)
         if code >= 200 and code < 300:
             return code, json.loads(raw.decode("utf-8")) if raw else (code, {})
         raise _parse_cloud_error(code, raw)
@@ -482,15 +557,24 @@ def upload_session(cfg: dict, meta: dict) -> None:
     # 上传用独立的长超时：几 MB 的清洗件在慢上行的家用宽带上远超 10s 的
     # 普通请求超时（2026-09 实际踩过：curl (28) 10s 超时）
     upload_timeout = max(float(cfg["http_timeout"]), 300)
-    if _http_transport() == "curl":
-        argv = [_curl_exe(), "-H", f"X-Session-Token: {meta['session_token']}",
+    if _http_transport(url) == "curl":
+        exe = _curl_exe()
+        if not exe:
+            raise CloudError(
+                "这台电脑缺少系统自带的 curl 组件，无法连接考试云端。"
+                "你的作答已安全保存在本机 pending_upload 文件夹，不会丢失；"
+                "请联系组织者处理。", status=0, friendly=True)
+        argv = [exe, "-H", f"X-Session-Token: {meta['session_token']}",
                 "-H", "Accept: application/json"]
         for name, value in fields.items():
             argv += ["-F", f"{name}={value}"]
         for name, path in files:
             argv += ["-F", f"{name}=@{path};type=application/octet-stream"]
         argv.append(url)
-        code, raw = _curl_exec(argv, timeout=upload_timeout)
+        if _is_cf_fronted(url):  # CF 前置：退避重试，绝不回退 urllib
+            code, raw = _curl_exec_cf(argv, timeout=upload_timeout, url=url)
+        else:
+            code, raw = _curl_exec(argv, timeout=upload_timeout)
         if 200 <= code < 300:
             return
         err = _parse_cloud_error(code, raw)
