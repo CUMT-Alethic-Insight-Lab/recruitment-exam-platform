@@ -8,6 +8,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 import urllib.error
@@ -1202,6 +1203,16 @@ class TestFinishFlow(_LocalServerTestCase):
         self.assertEqual(state["stage"], "uploaded")
         self.assertEqual(state["repo_url"], "http://github.com/x/y")
 
+    def test_upload_holds_upload_lock(self):
+        # 确认上传与后台补传 worker 互斥：上传时必须持有 _upload_lock
+        def locked(cfg, meta):
+            self.assertTrue(es._upload_lock.locked())
+
+        es.upload_session = locked
+        self._post_clean(self._kimi_zip_bytes())
+        state = self._post_upload()
+        self.assertEqual(state["stage"], "uploaded")
+
     def test_upload_without_clean_400(self):
         code, payload = self._post_upload_error({})
         self.assertEqual(code, 400)
@@ -1406,7 +1417,13 @@ class TestRetryUpload(_LocalServerTestCase):
         es.PENDING_DIR.joinpath("s1").mkdir()
         es.PENDING_DIR.joinpath("s1", "cleaned.jsonl").write_bytes(b"{}")
         calls = []
-        es.upload_session = lambda cfg, meta: calls.append(meta)
+
+        def locked_upload(cfg, meta):
+            # 手动重试与后台补传 worker 互斥：上传时必须持有 _upload_lock
+            self.assertTrue(es._upload_lock.locked())
+            calls.append(meta)
+
+        es.upload_session = locked_upload
         state = self._post("/api/retry_upload")
         self.assertEqual(state["stage"], "uploaded")
         self.assertTrue(state["uploaded"])
@@ -1429,6 +1446,9 @@ class TestRetryUpload(_LocalServerTestCase):
         state = self._post("/api/retry_upload")
         self.assertEqual(state["stage"], "finished")
         self.assertTrue(state["upload_pending"])
+        # 失败文案走白话翻译（与交卷失败口径一致），不暴露原始异常文本
+        self.assertIn("pending_upload", state["upload_error"])
+        self.assertIn("重试上传", state["upload_error"])
 
     def test_retry_without_pending_base_400(self):
         self.write_state(stage="finished")
@@ -1439,6 +1459,104 @@ class TestRetryUpload(_LocalServerTestCase):
             urllib.request.urlopen(req)
         self.assertEqual(cm.exception.code, 400)
         cm.exception.close()
+
+
+class TestUploadWorkerLoop(unittest.TestCase):
+    """周期补传 worker：启动即跑第一趟、循环触发、空转休眠、
+    与手动上传互斥（同一件不并发重传）、单轮异常不死。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.orig_pending = es.PENDING_DIR
+        es.PENDING_DIR = Path(self.tmp.name) / "pending"
+        es.PENDING_DIR.mkdir()
+        self.orig_retry = es.retry_pending_uploads
+        self.stop = threading.Event()
+        self.thread = None
+
+    def tearDown(self):
+        self.stop.set()
+        if self.thread is not None:
+            self.thread.join(timeout=5)
+        es.retry_pending_uploads = self.orig_retry
+        es.PENDING_DIR = self.orig_pending
+        self.tmp.cleanup()
+
+    def _unuploaded_meta(self):
+        (es.PENDING_DIR / "a.meta.json").write_text(
+            json.dumps({"uploaded": False}), encoding="utf-8")
+
+    def _start(self, fake_retry, interval=0.01):
+        es.retry_pending_uploads = fake_retry
+        self.thread = threading.Thread(
+            target=es._upload_worker, args=(self.stop, interval), daemon=True)
+        self.thread.start()
+
+    def test_first_pass_runs_immediately_and_loops(self):
+        self._unuploaded_meta()
+        calls = []
+        enough = threading.Event()
+
+        def fake(cfg=None):
+            calls.append(1)
+            if len(calls) >= 3:
+                enough.set()
+
+        self._start(fake)
+        self.assertTrue(enough.wait(timeout=5), "补传循环未反复触发")
+        self.assertGreaterEqual(len(calls), 3)
+
+    def test_idle_when_nothing_pending(self):
+        calls = []
+        self._start(lambda cfg=None: calls.append(1))
+        time.sleep(0.2)
+        self.assertEqual(calls, [])  # 没有待补传项就空转休眠
+
+    def test_worker_survives_round_exception(self):
+        self._unuploaded_meta()
+        calls = []
+        recovered = threading.Event()
+
+        def fake(cfg=None):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            recovered.set()
+
+        self._start(fake)
+        self.assertTrue(recovered.wait(timeout=5), "单轮异常后循环未继续")
+
+    def test_worker_holds_upload_lock(self):
+        self._unuploaded_meta()
+        seen = []
+        ran = threading.Event()
+
+        def fake(cfg=None):
+            seen.append(es._upload_lock.locked())
+            ran.set()
+
+        self._start(fake)
+        self.assertTrue(ran.wait(timeout=5))
+        self.assertEqual(seen, [True])
+
+    def test_worker_waits_for_manual_upload_lock(self):
+        # 手动重试/交卷持锁上传期间，worker 轮次不得并发补传同一件
+        self._unuploaded_meta()
+        calls = []
+        ran = threading.Event()
+
+        def fake(cfg=None):
+            calls.append(1)
+            ran.set()
+
+        es.retry_pending_uploads = fake
+        with es._upload_lock:
+            self.thread = threading.Thread(
+                target=es._upload_worker, args=(self.stop, 0.01), daemon=True)
+            self.thread.start()
+            time.sleep(0.2)
+            self.assertEqual(calls, [], "持锁期间 worker 不应并发补传")
+        self.assertTrue(ran.wait(timeout=5), "释放锁后 worker 应继续补传")
 
 
 class TestRetryPendingWorker(unittest.TestCase):

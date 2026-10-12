@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import queue
+import random
 import re
 import secrets
 import socket
@@ -940,8 +941,46 @@ def retry_pending_uploads(cfg: dict | None = None) -> None:
             save_state(state)
 
 
-def start_upload_worker() -> None:
-    threading.Thread(target=retry_pending_uploads, name="upload-retry", daemon=True).start()
+# 手动重试/交卷上传与后台补传互斥：同一件交卷绝不并发重传
+_upload_lock = threading.Lock()
+
+UPLOAD_RETRY_INTERVAL = 60.0        # 自动补传轮询周期（秒）
+UPLOAD_RETRY_JITTER_RATIO = 0.1     # 周期加少量抖动，防多台考试机扎堆
+
+
+def _has_unuploaded_meta() -> bool:
+    """pending_upload 里是否还有 uploaded!=true 的 meta（没有就空转休眠）。"""
+    try:
+        for meta_path in PENDING_DIR.glob("**/*.meta.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                continue
+            if not meta.get("uploaded"):
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def _upload_worker(stop: threading.Event, interval: float) -> None:
+    """周期补传循环：启动即跑第一趟，之后每 interval（+抖动）扫一遍 pending_upload，
+    有待补传项才重传。单轮异常只记日志，循环不死；stop 置位后尽快退出（测试用）。"""
+    while not stop.is_set():
+        try:
+            if _has_unuploaded_meta():
+                with _upload_lock:
+                    retry_pending_uploads()
+        except Exception as exc:
+            _log(f"自动补传轮次异常（下轮继续）: {exc}")
+        stop.wait(interval + random.uniform(0, interval * UPLOAD_RETRY_JITTER_RATIO))
+
+
+def start_upload_worker(interval: float = UPLOAD_RETRY_INTERVAL) -> None:
+    """后台周期补传：断网/上传失败的交卷，联网后无需考生操作自动重传。"""
+    stop = threading.Event()  # 常驻 daemon，随进程退出，不主动停
+    threading.Thread(target=_upload_worker, args=(stop, interval),
+                     name="upload-retry", daemon=True).start()
 
 
 # ---------- Kimi Code 会话定位与导出 ----------
@@ -4237,7 +4276,8 @@ class ExamHandler(BaseHTTPRequestHandler):
         save_meta(base, meta)
         state["repo_url"] = repo_url
         try:
-            upload_session(self.cfg, meta)
+            with _upload_lock:
+                upload_session(self.cfg, meta)
         except CloudError as exc:
             state.update({"stage": "finished", "uploaded": False,
                           "upload_pending": True,
@@ -4261,7 +4301,8 @@ class ExamHandler(BaseHTTPRequestHandler):
             return self._send_json(
                 {"error": "还没有清洗任何一道题的会话——"
                           "请先在第 2 小步逐题清洗"}, status=400)
-        failures, last_meta = _upload_slot_entries(state, self.cfg, repo_url)
+        with _upload_lock:
+            failures, last_meta = _upload_slot_entries(state, self.cfg, repo_url)
         if repo_url:
             state["repo_url"] = repo_url
         if failures:
@@ -4353,11 +4394,12 @@ class ExamHandler(BaseHTTPRequestHandler):
             save_state(state)
             return self._send_json(state)
         try:
-            upload_session(self.cfg, meta)
+            with _upload_lock:
+                upload_session(self.cfg, meta)
         except CloudError as exc:
             state["uploaded"] = False
             state["upload_pending"] = True
-            state["upload_error"] = str(exc)
+            state["upload_error"] = _friendly_upload_error(exc)
             save_state(state)
             return self._send_json(state)
         meta["uploaded"] = True
@@ -4521,7 +4563,7 @@ def main():
         _log(f"作答工具: {AGENT_LABELS[cfg['agent']]}  Web 指令: {agent_web_cmd(cfg)}")
         _log(f"考试工作目录: {agent_workdir(cfg)}")
         _log(">>> 如果浏览器没有自动打开，请手动在 Edge 地址栏输入：%s" % url)
-        start_upload_worker()  # 断网遗留的交卷后台自动补传
+        start_upload_worker()  # 断网/失败交卷的周期自动补传（每 60s 轮询）
         if "--no-browser" not in sys.argv:
             # 自动开默认浏览器（安装器/启动 bat 不再重复开页面）。
             # 注意：threading.Timer 不接受 name= 参数（只有 Thread 才收），勿加。
