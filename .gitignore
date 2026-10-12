@@ -1,0 +1,8 @@
+export_session_example/
+website-spa-proto/
+百团大绽/
+.memdiag/
+itv_tmp_*
+__pycache__/
+.pytest_cache/
+*.pyc
