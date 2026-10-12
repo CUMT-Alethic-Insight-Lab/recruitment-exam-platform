@@ -117,7 +117,7 @@ def test_incomplete_blocked_enroll_and_project(client, cid):
     assert res.json()["detail"] == "请先完成报名问卷"
 
     res = client.post(f"/api/campaigns/{cid}/applications/me/project",
-                      json={"repo_url": "https://github.com/a/b"}, headers=headers)
+                      data={"repo_url": "https://github.com/a/b"}, headers=headers)
     assert res.status_code == 400
     assert res.json()["detail"] == "请先完成报名问卷"
 

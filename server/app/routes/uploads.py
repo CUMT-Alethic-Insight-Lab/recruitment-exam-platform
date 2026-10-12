@@ -3,17 +3,16 @@ import json
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from .. import config, db
+from .. import cleaned_report, config, db
 from ..auth import require_admin
+from ..constants import MAX_ATTACHMENT_BYTES  # noqa: F401  兼容既有 import 路径
 from ..schemas import ExamSessionOut
 from .campaigns import get_campaign_or_404, now_iso
-from .exam import _row_to_out, get_session_or_404
-
-MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
+from .exam import _row_to_out, get_session_or_404, save_zip_attachment
 
 router = APIRouter(prefix="/api/campaigns", tags=["uploads"])
 
@@ -79,24 +78,7 @@ def upload_session(
 
         attachment_path = row["attachment_file_path"]
         if attachment is not None and attachment.filename:
-            if not attachment.filename.endswith(".zip"):
-                raise HTTPException(status_code=400, detail="附件须为 .zip 文件")
-            target_dir = _uploads_dir(cid, session_id)
-            target_dir.mkdir(parents=True, exist_ok=True)
-            att_path = target_dir / "attachment.zip"
-            too_large = False
-            size = 0
-            with att_path.open("wb") as f:
-                while chunk := attachment.file.read(1024 * 1024):
-                    size += len(chunk)
-                    if size > MAX_ATTACHMENT_BYTES:
-                        too_large = True
-                        break
-                    f.write(chunk)
-            if too_large:
-                att_path.unlink(missing_ok=True)
-                raise HTTPException(status_code=413, detail="附件超过 50MB 上限")
-            attachment_path = str(att_path)
+            attachment_path = save_zip_attachment(attachment, cid, session_id)
 
         target_dir = _uploads_dir(cid, session_id)
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -186,6 +168,7 @@ def mark_lan_uploaded(
 @router.get("/{cid}/sessions/{sid}/files/{kind}")
 def download_session_file(
     cid: str, sid: str, kind: str, slot: int | None = None,
+    format: str = "jsonl",
     _: None = Depends(require_admin),
 ):
     if kind not in ("cleaned", "attachment"):
@@ -210,4 +193,24 @@ def download_session_file(
             media_type = "application/zip"
         if not path or not Path(path).is_file():
             raise HTTPException(status_code=404, detail="文件不存在")
+        if kind == "cleaned" and format != "jsonl":
+            if format != "md":
+                raise HTTPException(status_code=400, detail="无效格式（jsonl/md）")
+            suffix = "" if slot is None else f"_q{slot}"
+            header = [
+                ("学号", row["student_id"]),
+                ("轨迹", row["track"]),
+                ("开考时间", row["opened_at"]),
+                ("交卷时间", row["uploaded_at"] or ""),
+            ]
+            if slot is not None:
+                header.append(("题号", f"第 {slot + 1} 题"))
+            md = cleaned_report.records_to_markdown(
+                cleaned_report.load_records(path), header)
+            return Response(
+                content=md.encode("utf-8"),
+                media_type="text/markdown; charset=utf-8",
+                headers={"Content-Disposition":
+                         f'attachment; filename="cleaned{suffix}.md"'},
+            )
         return FileResponse(path, media_type=media_type, filename=Path(path).name)

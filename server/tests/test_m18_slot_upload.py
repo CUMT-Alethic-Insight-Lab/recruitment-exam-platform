@@ -95,6 +95,64 @@ def test_slot_uploads_independent_and_idempotent(client, cid, admin_headers):
     assert "第三题" in res.text
 
 
+def test_cleaned_download_md_format(client, cid, admin_headers):
+    session_id, token = _enroll(client, cid, "08265504")
+    payload = (
+        '{"k": "user", "time": 1760000000000, "text": "你好"}\n'
+        '{"k": "assistant", "time": 1760000001000, "text": "回复正文"}\n'
+        '{"k": "tool", "time": 1760000002000, "name": "Read",'
+        ' "arg": "README.md", "out_len": 42}\n'
+    ).encode()
+    res = client.post(
+        f"/api/campaigns/{cid}/sessions",
+        data={"session_id": session_id},
+        files={"cleaned": ("cleaned.jsonl", payload, "application/octet-stream")},
+        headers={"X-Session-Token": token},
+    )
+    assert res.status_code == 200, res.text
+
+    # format=md：服务端转换为 Markdown 报告，带 .md 文件名与 text/markdown 类型
+    res = client.get(
+        f"/api/campaigns/{cid}/sessions/{session_id}/files/cleaned?format=md",
+        headers=admin_headers)
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("text/markdown")
+    assert 'filename="cleaned.md"' in res.headers["content-disposition"]
+    assert "08265504" in res.text
+    assert "## 👤 用户" in res.text
+    assert "## 🤖 助手" in res.text
+    assert "🔧 工具：Read" in res.text
+    assert "（输出 42 字符）" in res.text
+
+    # 默认 format=jsonl：原始 NDJSON 原样返回，不回归
+    res = client.get(
+        f"/api/campaigns/{cid}/sessions/{session_id}/files/cleaned",
+        headers=admin_headers)
+    assert res.status_code == 200
+    assert "回复正文" in res.text
+    assert "## 👤 用户" not in res.text
+
+    # 非法格式 → 400
+    res = client.get(
+        f"/api/campaigns/{cid}/sessions/{session_id}/files/cleaned?format=pdf",
+        headers=admin_headers)
+    assert res.status_code == 400
+
+
+def test_slot_download_md_filename(client, cid, admin_headers):
+    session_id, token = _enroll(client, cid, "08265505")
+    res = _upload_slot(client, cid, session_id, token, 1, "第二题")
+    assert res.status_code == 200, res.text
+
+    res = client.get(
+        f"/api/campaigns/{cid}/sessions/{session_id}"
+        "/files/cleaned?slot=1&format=md",
+        headers=admin_headers)
+    assert res.status_code == 200
+    assert 'filename="cleaned_q1.md"' in res.headers["content-disposition"]
+    assert "第 2 题" in res.text
+
+
 def test_slot_upload_rejected_after_void(client, cid, admin_headers):
     session_id, token = _enroll(client, cid, "08265502")
     res = _upload_slot(client, cid, session_id, token, 0, "先交一题")

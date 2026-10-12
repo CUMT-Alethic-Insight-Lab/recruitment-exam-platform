@@ -1,16 +1,21 @@
+import collections
 import json
 import secrets
 import sqlite3
+import time
+import urllib.request
 import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from .. import auth, db
+from .. import auth, config, db
 from ..auth import require_admin, require_applicant
-from ..constants import EXAM_TRACKS
+from ..constants import EXAM_TRACKS, MAX_ATTACHMENT_BYTES
 from ..db import DEFAULT_EXAM_CONFIG
-from ..schemas import ExamSessionOut, ExamVoid, ProjectSubmitBody, PublicQuestionOut
+from ..schemas import ExamSessionOut, ExamVoid, PublicQuestionOut
 from .campaigns import get_campaign_or_404, now_iso
 
 router = APIRouter(prefix="/api/campaigns", tags=["exam"])
@@ -19,7 +24,9 @@ TRACK_KEYS = [t["key"] for t in EXAM_TRACKS]
 
 
 class EnrollBody(BaseModel):
-    track: str
+    # 开考二选一：track 缺省/空串 = 题库自选（须带 question_ids，会话记 track="selected"）；
+    # track 非空走原有轨迹逻辑（向后兼容旧 kit）。
+    track: str | None = None
     question_ids: list[str] | None = None
     domain: str | None = None
     student_id: str | None = None
@@ -63,18 +70,45 @@ def pick_selected_questions(conn: sqlite3.Connection,
     return rows
 
 
-def check_track3_domains(qrows: list[sqlite3.Row],
-                         applicant_domains: list[str]) -> None:
-    """自由创作自选（track3）领域约束：一个领域答一道题。
+def check_selected_domains(qrows: list[sqlite3.Row],
+                           applicant_domains: list[str]) -> None:
+    """自选题目领域约束（track 无关）：题目领域 ⊆ 考生报名问卷领域。"""
+    if any(r["domain"] not in applicant_domains for r in qrows):
+        raise HTTPException(status_code=403, detail="只能选问卷里报过的领域")
 
-    ①题目领域必须都在考生报名领域内；②题目领域互不重复；③1~3 题（此处只管前两条，
-    数量与 active 校验在 pick_selected_questions 已完成）。
+
+def check_track3_domains(qrows: list[sqlite3.Row]) -> None:
+    """自由创作自选（track3）额外约束：一个领域答一道题（领域互不重复）。
+
+    领域归属校验已由 check_selected_domains 统一完成（403）；
+    数量与 active 校验在 pick_selected_questions 已完成。
     """
     q_domains = [r["domain"] for r in qrows]
-    if any(d not in applicant_domains for d in q_domains):
-        raise HTTPException(status_code=400, detail="只能选择自己报名领域内的题目")
     if len(set(q_domains)) != len(q_domains):
         raise HTTPException(status_code=400, detail="同一领域只能选择一道题作答")
+
+
+def save_zip_attachment(attachment: UploadFile, cid: str, sid: str) -> str:
+    """校验并落盘 zip 附件（≤50MB）到 data/uploads/{cid}/{sid}/attachment.zip，
+    返回落盘路径；超限先删半成品再 413。"""
+    if not (attachment.filename or "").endswith(".zip"):
+        raise HTTPException(status_code=400, detail="附件须为 .zip 文件")
+    target_dir = Path(config.DATA_DIR) / "uploads" / cid / sid
+    target_dir.mkdir(parents=True, exist_ok=True)
+    att_path = target_dir / "attachment.zip"
+    too_large = False
+    size = 0
+    with att_path.open("wb") as f:
+        while chunk := attachment.file.read(1024 * 1024):
+            size += len(chunk)
+            if size > MAX_ATTACHMENT_BYTES:
+                too_large = True
+                break
+            f.write(chunk)
+    if too_large:
+        att_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=413, detail="附件超过 50MB 上限")
+    return str(att_path)
 
 
 def questions_to_dict(rows: list[sqlite3.Row]) -> list[dict]:
@@ -130,8 +164,15 @@ def enroll(cid: str, body: EnrollBody,
            student_id: str = Depends(require_applicant)):
     if body.student_id and body.student_id != student_id:
         raise HTTPException(status_code=403, detail="student_id 与登录会话不符")
-    if body.track not in TRACK_KEYS:
-        raise HTTPException(status_code=400, detail=f"无效轨迹: {body.track}")
+    # 开考二选一：track 缺省/空串 = 题库自选（必须带 question_ids，会话记
+    # track="selected"）；track 非空走原有轨迹逻辑（向后兼容旧 kit）。
+    track = (body.track or "").strip()
+    if track:
+        if track not in TRACK_KEYS:
+            raise HTTPException(status_code=400, detail=f"无效轨迹: {track}")
+    elif not body.question_ids:
+        raise HTTPException(status_code=400, detail="未选择作答方式")
+    session_track = track or "selected"
     with db.connection() as conn:
         campaign = get_campaign_or_404(conn, cid)
         if campaign["status"] != "open":
@@ -148,12 +189,6 @@ def enroll(cid: str, body: EnrollBody,
             )
         if not app["registration_complete"]:
             raise HTTPException(status_code=400, detail="请先完成报名问卷")
-        if app["exam_mode"] == "own_project":
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "own_project_no_enroll",
-                        "message": "个人项目轨请在报名页提交仓库链接"},
-            )
         existing = conn.execute(
             "SELECT * FROM exam_session WHERE campaign_id = ? AND student_id = ?"
             " AND status = 'draft' ORDER BY opened_at DESC LIMIT 1",
@@ -172,14 +207,14 @@ def enroll(cid: str, body: EnrollBody,
         domains = json.loads(app["domains"])
         if body.question_ids is not None:
             qrows = pick_selected_questions(conn, body.question_ids)
-            if body.track == "track3":
-                check_track3_domains(qrows, domains)
-                # 按领域交卷：track3 会话只记本次所选题目的领域（每领域至多一题
-                # 已在上面去重），供「该领域是否已交卷」与考生自查对账
-                session_domains = list(dict.fromkeys(r["domain"] for r in qrows))
-            else:
-                session_domains = domains
-        elif body.track == "track3":
+            # 凡自选题目（不论 track，含缺省）都限报名问卷领域内；track3 额外一域一题
+            check_selected_domains(qrows, domains)
+            if track == "track3":
+                check_track3_domains(qrows)
+            # 按领域交卷：自选开考的会话只记本次所选题目覆盖的领域（去重保序），
+            # 供「该领域是否已交卷」与考生自查对账，避免「选了的和答了的领域不一致」
+            session_domains = list(dict.fromkeys(r["domain"] for r in qrows))
+        elif track == "track3":
             # M12 自由创作：track3 必须二选一——question_ids 选题（上面的分支）
             # 或 domain 自由发挥（不发题，只记领域）；不再随机发 track3 题。
             domain = (body.domain or "").strip()
@@ -190,18 +225,18 @@ def enroll(cid: str, body: EnrollBody,
             qrows = []
             session_domains = [domain]
         else:
-            per_domain = (cfg["track1_per_domain"] if body.track == "track1"
+            per_domain = (cfg["track1_per_domain"] if track == "track1"
                           else cfg["track2_per_domain"])
-            qrows = pick_questions(conn, domains, body.track, per_domain)
+            qrows = pick_questions(conn, domains, track, per_domain)
             session_domains = domains
-        # 已交卷约束：track1/track2 一锤定音（有 uploaded 会话即 409）；
+        # 已交卷约束：track1/track2/selected 一锤定音（有 uploaded 会话即 409）；
         # track3 按领域独立交卷——本次目标领域与已交会话 domain_tags 有交集才 409
         uploaded_rows = conn.execute(
             "SELECT domain_tags FROM exam_session WHERE campaign_id = ?"
             " AND student_id = ? AND status = 'uploaded'",
             (cid, student_id),
         ).fetchall()
-        if body.track == "track3":
+        if track == "track3":
             done_domains: set[str] = set()
             for r in uploaded_rows:
                 try:
@@ -230,7 +265,7 @@ def enroll(cid: str, body: EnrollBody,
             "INSERT INTO exam_session (id, campaign_id, student_id, session_token,"
             " machine_id, track, domain_tags, questions_served, status, opened_at)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)",
-            (sid, cid, student_id, token, machine_id, body.track,
+            (sid, cid, student_id, token, machine_id, session_track,
              json.dumps(session_domains, ensure_ascii=False),
              json.dumps(questions_to_dict(qrows), ensure_ascii=False), now),
         )
@@ -261,6 +296,8 @@ def reroll(cid: str, body: dict, x_session_token: str | None = Header(default=No
         track = row["track"]
         if track == "track3":
             raise HTTPException(status_code=400, detail="自由创作型轨迹无需换题")
+        if track == "selected":
+            raise HTTPException(status_code=400, detail="题库自选会话不支持换题")
         domains = json.loads(row["domain_tags"])
         per_domain = cfg["track1_per_domain"] if track == "track1" else cfg["track2_per_domain"]
         qrows = pick_questions(conn, domains, track, per_domain)
@@ -352,11 +389,83 @@ def my_sessions(cid: str, student_id: str = Depends(require_applicant)):
     return out
 
 
+P2P_KEY_LIMIT_PER_HOUR = 10
+P2P_KEY_TTL_HOURS = 4
+_p2p_key_calls: dict[str, collections.deque] = {}
+
+
+def _check_p2p_key_rate(student_id: str) -> None:
+    """考生维度内存限流（10 次/小时）。登录限流是 login_attempt 表的锁定语义，
+    不通用，故此处单独实现。"""
+    now = time.monotonic()
+    calls = _p2p_key_calls.setdefault(student_id, collections.deque())
+    while calls and calls[0] <= now - 3600:
+        calls.popleft()
+    if len(calls) >= P2P_KEY_LIMIT_PER_HOUR:
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+    calls.append(now)
+
+
+def _p2p_unavailable() -> HTTPException:
+    # 客户端据此回退普通 HTTPS 上传；不向外泄露 API Key 与异常细节
+    return HTTPException(status_code=503, detail="p2p unavailable")
+
+
+def _request_preauthkey() -> str:
+    expiration = (datetime.now(timezone.utc)
+                  + timedelta(hours=P2P_KEY_TTL_HOURS)).isoformat().replace("+00:00", "Z")
+    req = urllib.request.Request(
+        f"{config.HEADSCALE_URL}/api/v1/preauthkey",
+        data=json.dumps({
+            "user": config.HEADSCALE_USER_ID,
+            "reusable": False,
+            "ephemeral": True,
+            "expiration": expiration,
+            "aclTags": ["tag:candidate"],
+        }).encode(),
+        headers={
+            "Authorization": f"Bearer {config.HEADSCALE_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        data = json.loads(resp.read().decode())
+    return data["preAuthKey"]["key"]
+
+
+@router.post("/{cid}/exam/p2p-key")
+def exam_p2p_key(cid: str, student_id: str = Depends(require_applicant)):
+    """向考生下发短时 Headscale preauthkey，供机试包接入 P2P mesh 直传实验室主机。"""
+    with db.connection() as conn:
+        get_campaign_or_404(conn, cid)
+    _check_p2p_key_rate(student_id)
+    if not config.HEADSCALE_API_KEY or not config.LAB_TAILNET_IP:
+        raise _p2p_unavailable()
+    try:
+        key = _request_preauthkey()
+    except Exception:
+        raise _p2p_unavailable() from None
+    with db.connection() as conn:
+        auth.write_audit(conn, student_id, "exam_p2p_key", target=cid,
+                         detail="headscale preauthkey issued")
+    return {
+        "login_server": config.HEADSCALE_URL,
+        "auth_key": key,
+        "lab_ip": config.LAB_TAILNET_IP,
+        "receiver_port": 8897,
+        "api_port": 8901,
+    }
+
+
 @router.post("/{cid}/applications/me/project", response_model=ExamSessionOut)
-def submit_project(cid: str, body: ProjectSubmitBody,
+def submit_project(cid: str, repo_url: str = Form(...),
+                   attachment: UploadFile | None = File(None),
                    student_id: str = Depends(require_applicant)):
-    """个人项目轨考生直提 GitHub 仓库链接，直接生成已交卷会话。"""
-    repo_url = body.repo_url.strip()
+    """自有项目直提（开考二选一）：GitHub 仓库链接 + 可选 zip 附件（≤50MB），
+    直接生成已交卷会话（track='project'）。开考二选一下任何完成报名问卷的考生
+    均可提交，不再限于问卷 exam_mode=own_project。"""
+    repo_url = repo_url.strip()
     if not repo_url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="repo_url 须以 http(s):// 开头")
     with db.connection() as conn:
@@ -369,12 +478,6 @@ def submit_project(cid: str, body: ProjectSubmitBody,
             raise HTTPException(status_code=404, detail="未找到该学号的报名记录")
         if not app["registration_complete"]:
             raise HTTPException(status_code=400, detail="请先完成报名问卷")
-        if app["exam_mode"] != "own_project":
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "not_own_project",
-                        "message": "仅个人项目（GitHub 仓库直提）考生可提交仓库链接"},
-            )
         existing = conn.execute(
             "SELECT 1 FROM exam_session WHERE campaign_id = ? AND student_id = ?"
             " AND status != 'voided'",
@@ -389,12 +492,15 @@ def submit_project(cid: str, body: ProjectSubmitBody,
         sid = uuid.uuid4().hex[:16]
         token = secrets.token_urlsafe(32)
         now = now_iso()
+        attachment_path = None
+        if attachment is not None and attachment.filename:
+            attachment_path = save_zip_attachment(attachment, cid, sid)
         conn.execute(
             "INSERT INTO exam_session (id, campaign_id, student_id, session_token,"
             " machine_id, track, domain_tags, questions_served, status, opened_at,"
-            " uploaded_at, repo_url)"
-            " VALUES (?, ?, ?, ?, 'web', 'project', '[]', '[]', 'uploaded', ?, ?, ?)",
-            (sid, cid, student_id, token, now, now, repo_url),
+            " uploaded_at, repo_url, attachment_file_path)"
+            " VALUES (?, ?, ?, ?, 'web', 'project', '[]', '[]', 'uploaded', ?, ?, ?, ?)",
+            (sid, cid, student_id, token, now, now, repo_url, attachment_path),
         )
         conn.execute(
             "UPDATE application SET status = 'tested', updated_at = ?"

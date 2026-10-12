@@ -1,5 +1,5 @@
 """考试方式扩展契约测试：exam_mode 入库回显、auth/me、公开题列表、
-自选题报名、own_project 拦 enroll、仓库直提端点、上传带 repo_url。"""
+自选题报名、own_project 可 enroll（开考二选一）、仓库直提端点（multipart）、上传带 repo_url。"""
 import sys
 
 from app.constants import EXAM_MODES
@@ -136,8 +136,10 @@ def test_enroll_with_question_ids(client, cid, admin_headers):
     q_inactive = _create_question(client, admin_headers, "自选题停用", active=False)
 
     student = "08263601"
+    # 自选领域校验已推广到所有 track：报名领域须覆盖所选题目领域
     client.post(f"/api/campaigns/{cid}/applications",
-                json=_app_payload(student, "自选题"))
+                json={**_app_payload(student, "自选题"),
+                      "domains": ["llm_arch", "memory", "infra"]})
     headers = applicant_headers(client, cid, student)
 
     # 先覆盖全部非法分支（此时尚无会话，不会撞 409 already_enrolled）
@@ -188,15 +190,16 @@ def test_enroll_with_question_ids(client, cid, admin_headers):
     assert res.status_code == 200, res.text
 
 
-def test_own_project_cannot_enroll(client, cid):
+def test_own_project_can_enroll(client, cid):
+    # 开考二选一：问卷选了 own_project 的考生也允许做题（enroll 不再拦截）
     student = "08263701"
     client.post(f"/api/campaigns/{cid}/applications",
                 json=_app_payload(student, "项目轨", exam_mode="own_project"))
     headers = applicant_headers(client, cid, student)
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
                       json={"track": "track1"}, headers=headers)
-    assert res.status_code == 400
-    assert "个人项目轨请在报名页提交仓库链接" in str(res.json()["detail"])
+    assert res.status_code == 200, res.text
+    assert res.json()["track"] == "track1"
 
 
 def test_project_submit_happy_path(client, cid, admin_headers):
@@ -206,7 +209,7 @@ def test_project_submit_happy_path(client, cid, admin_headers):
     headers = applicant_headers(client, cid, student)
 
     res = client.post(f"/api/campaigns/{cid}/applications/me/project",
-                      json={"repo_url": "https://github.com/alethic/demo"},
+                      data={"repo_url": "https://github.com/alethic/demo"},
                       headers=headers)
     assert res.status_code == 200, res.text
     session = res.json()
@@ -215,6 +218,7 @@ def test_project_submit_happy_path(client, cid, admin_headers):
     assert session["machine_id"] == "web"
     assert session["questions_served"] == []
     assert session["repo_url"] == "https://github.com/alethic/demo"
+    assert session["attachment_file_path"] is None
     assert session["uploaded_at"]
 
     # application.status → tested
@@ -228,15 +232,17 @@ def test_project_submit_happy_path(client, cid, admin_headers):
     assert res.json()["track"] == "project"
 
 
-def test_project_submit_rejects_non_own_project(client, cid):
+def test_project_submit_allows_standard(client, cid):
+    # 开考二选一：standard 考生也可直提自有项目（不再限 own_project）
     student = "08263901"
     client.post(f"/api/campaigns/{cid}/applications",
                 json=_app_payload(student, "标准乙", exam_mode="standard"))
     headers = applicant_headers(client, cid, student)
     res = client.post(f"/api/campaigns/{cid}/applications/me/project",
-                      json={"repo_url": "https://github.com/alethic/x"},
+                      data={"repo_url": "https://github.com/alethic/x"},
                       headers=headers)
-    assert res.status_code == 400
+    assert res.status_code == 200, res.text
+    assert res.json()["track"] == "project"
 
 
 def test_project_submit_duplicate_409(client, cid):
@@ -245,10 +251,10 @@ def test_project_submit_duplicate_409(client, cid):
                 json=_app_payload(student, "直提乙", exam_mode="own_project"))
     headers = applicant_headers(client, cid, student)
     res = client.post(f"/api/campaigns/{cid}/applications/me/project",
-                      json={"repo_url": "https://github.com/a/b"}, headers=headers)
+                      data={"repo_url": "https://github.com/a/b"}, headers=headers)
     assert res.status_code == 200
     res = client.post(f"/api/campaigns/{cid}/applications/me/project",
-                      json={"repo_url": "https://github.com/c/d"}, headers=headers)
+                      data={"repo_url": "https://github.com/c/d"}, headers=headers)
     assert res.status_code == 409
 
 
@@ -257,10 +263,14 @@ def test_project_submit_repo_url_validation(client, cid):
     client.post(f"/api/campaigns/{cid}/applications",
                 json=_app_payload(student, "直提丙", exam_mode="own_project"))
     headers = applicant_headers(client, cid, student)
-    for bad in ("ftp://github.com/x", "github.com/y", ""):
+    for bad in ("ftp://github.com/x", "github.com/y"):
         res = client.post(f"/api/campaigns/{cid}/applications/me/project",
-                          json={"repo_url": bad}, headers=headers)
+                          data={"repo_url": bad}, headers=headers)
         assert res.status_code == 400, bad
+    # 空字符串表单字段被 FastAPI 视为缺失 → 422（同样拒绝）
+    res = client.post(f"/api/campaigns/{cid}/applications/me/project",
+                      data={"repo_url": ""}, headers=headers)
+    assert res.status_code == 422
 
 
 def test_upload_still_accepts_repo_url(client, cid, admin_headers):

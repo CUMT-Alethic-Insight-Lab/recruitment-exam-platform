@@ -104,8 +104,8 @@ def test_track3_outside_domain_rejected(client, cid, admin_headers):
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
                       json={"track": "track3", "question_ids": [q1]},
                       headers=headers)
-    assert res.status_code == 400
-    assert "只能选择自己报名领域内的题目" in str(res.json()["detail"])
+    assert res.status_code == 403
+    assert "只能选问卷里报过的领域" in str(res.json()["detail"])
 
 
 def test_track3_mixed_outside_and_inside_rejected(client, cid, admin_headers):
@@ -121,8 +121,8 @@ def test_track3_mixed_outside_and_inside_rejected(client, cid, admin_headers):
     res = client.post(f"/api/campaigns/{cid}/exam/enroll",
                       json={"track": "track3", "question_ids": [q_ok, q_bad]},
                       headers=headers)
-    assert res.status_code == 400
-    assert "只能选择自己报名领域内的题目" in str(res.json()["detail"])
+    assert res.status_code == 403
+    assert "只能选问卷里报过的领域" in str(res.json()["detail"])
 
 
 def test_track3_single_ok(client, cid, admin_headers):
@@ -161,7 +161,8 @@ def test_track3_invalid_question_still_400(client, cid, admin_headers):
 
 
 def test_track12_selfselect_unchanged(client, cid, admin_headers):
-    # track1/track2 保持 1~3 题不变，不做领域去重/归属校验（同域两题仍可）
+    # track1/track2 保持 1~3 题不变，不做领域去重（同域两题仍可）；
+    # 归属校验已推广：所选题目领域须 ⊆ 报名领域（此例 llm_arch 在报名领域内）
     q1 = _create_question(client, admin_headers, "常规自选一", track="track2",
                           domain="llm_arch")
     q2 = _create_question(client, admin_headers, "常规自选二", track="track2",
@@ -176,3 +177,57 @@ def test_track12_selfselect_unchanged(client, cid, admin_headers):
                       headers=headers)
     assert res.status_code == 200, res.text
     assert [q["id"] for q in res.json()["questions"]] == [q1, q2]
+    # 自选开考的会话 domain_tags 记所选题目领域去重（不再写全部报名领域）
+    assert res.json()["domain_tags"] == ["llm_arch"]
+
+
+def test_track3_domain_free_creation_session(client, cid, admin_headers):
+    # M12：track3 + domain（无 question_ids）→ 自由创作会话
+    # （不发题 questions_served=[]，domain_tags 只记所选领域，带引导语）
+    student = "08265019"
+    client.post(f"/api/campaigns/{cid}/applications",
+                json=_app_payload(student, "自由创作域",
+                                  exam_mode="free_creation"))
+    headers = applicant_headers(client, cid, student)
+
+    res = client.post(f"/api/campaigns/{cid}/exam/enroll",
+                      json={"track": "track3", "domain": "memory"},
+                      headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["track"] == "track3"
+    assert data["questions"] == []
+    assert data["domain_tags"] == ["memory"]
+    assert data["track3_guide_text"] != ""
+
+
+def test_track3_domain_outside_applicant_domains_400(client, cid, admin_headers):
+    student = "08265020"
+    client.post(f"/api/campaigns/{cid}/applications",
+                json=_app_payload(student, "自由域外创作",
+                                  exam_mode="free_creation"))
+    headers = applicant_headers(client, cid, student)
+
+    res = client.post(f"/api/campaigns/{cid}/exam/enroll",
+                      json={"track": "track3", "domain": "infra"},
+                      headers=headers)
+    assert res.status_code == 400
+    assert "只能选择自己报名的领域" in str(res.json()["detail"])
+
+
+def test_track3_domain_ignored_when_question_ids_given(client, cid, admin_headers):
+    # 同时给 question_ids 与 domain 时按自选题目走（domain 不参与）
+    q1 = _create_question(client, admin_headers, "自由带域题", track="track3",
+                          domain="llm_arch")
+    student = "08265021"
+    client.post(f"/api/campaigns/{cid}/applications",
+                json=_app_payload(student, "自由带域",
+                                  exam_mode="free_creation"))
+    headers = applicant_headers(client, cid, student)
+
+    res = client.post(f"/api/campaigns/{cid}/exam/enroll",
+                      json={"track": "track3", "question_ids": [q1],
+                            "domain": "memory"},
+                      headers=headers)
+    assert res.status_code == 200, res.text
+    assert [q["id"] for q in res.json()["questions"]] == [q1]

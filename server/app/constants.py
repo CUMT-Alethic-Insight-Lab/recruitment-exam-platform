@@ -26,6 +26,9 @@ EXAM_MODES = {
 # exam_session.track='project' 的展示名（个人项目轨直提，不经 enroll 开考）
 PROJECT_TRACK_NAME = "个人项目（GitHub 仓库）"
 
+# 交卷/自有项目附件（.zip）大小上限
+MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
+
 GENDERS = {"male": "男", "female": "女"}
 
 FOCUS_NEXT_YEAR = {

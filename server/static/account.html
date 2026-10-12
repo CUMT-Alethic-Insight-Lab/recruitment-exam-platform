@@ -114,10 +114,12 @@ __TOPBAR__
 
   <div class="card hidden" id="project-card">
     <h2 style="margin-top:0">提交个人项目</h2>
-    <p class="hint" style="margin-bottom:10px">你的考试方式为「个人项目（GitHub 仓库直提）」，无需下载考试机。提交 GitHub 仓库链接后即视为完成机试交付，请确认仓库为公开（或已授予评审权限）且包含完整说明。</p>
+    <p class="hint" style="margin-bottom:10px">开考二选一：选择「自有项目」的同学无需下载考试机，提交 GitHub 仓库链接（可选 zip 附件）后即视为完成机试交付。请确认仓库为公开（或已授予评审权限）且包含完整说明。</p>
     <div id="project-form-area">
       <label class="field-label" for="project-url">GitHub 仓库 URL <span style="color:var(--danger)">*</span></label>
       <input type="text" id="project-url" placeholder="https://github.com/用户名/仓库名">
+      <label class="field-label" for="project-attachment">附件（可选，.zip，≤50MB）</label>
+      <input type="file" id="project-attachment" accept=".zip">
       <button class="btn" id="project-submit-btn">提交个人项目</button>
       <p class="msg hidden" id="project-msg"></p>
     </div>
@@ -520,14 +522,29 @@ async function submitProject() {
     showProjectMsg('请填写以 http:// 或 https:// 开头的 GitHub 仓库链接', true);
     return;
   }
+  const attInput = document.getElementById('project-attachment');
+  const att = attInput.files && attInput.files[0];
+  if (att) {
+    if (!att.name.toLowerCase().endsWith('.zip')) {
+      showProjectMsg('附件须为 .zip 文件', true);
+      return;
+    }
+    if (att.size > 50 * 1024 * 1024) {
+      showProjectMsg('附件超过 50MB 上限', true);
+      return;
+    }
+  }
   const btn = document.getElementById('project-submit-btn');
   btn.disabled = true;
   btn.textContent = '提交中…';
   try {
+    const fd = new FormData();
+    fd.append('repo_url', url);
+    if (att) fd.append('attachment', att);
     const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/applications/me/project`, {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo_url: url })
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: fd
     });
     if (res.status === 409) {
       showProjectMsg('检测到你已提交过个人项目（已有考试会话），请勿重复提交；如需重新提交请联系管理员。', true);
@@ -554,7 +571,7 @@ async function submitProject() {
 }
 
 async function loadAuthMe() {
-  // 按届次的 auth/me 决定考试方式分支：own_project 显示项目提交表单，其余走机试指引
+  // 开考二选一：自有项目提交卡对所有考生可见；own_project 考生默认突出它（隐藏机试指引卡）
   const projectCard = document.getElementById('project-card');
   const guideCard = document.getElementById('guide-card');
   let me = null;
@@ -570,16 +587,15 @@ async function loadAuthMe() {
     banner.classList.remove('hidden');
   }
   const examMode = me && me.exam_mode ? me.exam_mode : 'standard';
+  projectCard.classList.remove('hidden');
+  if (me && me.has_session && me.track === 'project') {
+    showProjectSubmitted(null, me.track);
+  } else {
+    document.getElementById('project-submit-btn').addEventListener('click', submitProject);
+  }
   if (examMode === 'own_project') {
     guideCard.classList.add('hidden');
-    projectCard.classList.remove('hidden');
-    if (me && me.has_session) {
-      showProjectSubmitted(null, me.track);
-    } else {
-      document.getElementById('project-submit-btn').addEventListener('click', submitProject);
-    }
   } else {
-    projectCard.classList.add('hidden');
     guideCard.classList.remove('hidden');
     if (examMode === 'free_creation') {
       document.getElementById('free-creation-hint').classList.remove('hidden');

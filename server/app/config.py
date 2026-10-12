@@ -33,6 +33,14 @@ ADMIN_PUBLIC_PATH = os.environ.get("ADMIN_PUBLIC_PATH", "").rstrip("/")
 CAPTCHA_ENABLED = os.environ.get("ALE_THIC_CAPTCHA_ENABLED", "1").strip().lower() \
     not in ("0", "false", "no", "off")
 
+# Headscale/Tailscale P2P 入网：考生机试包凭短时 preauthkey 直连实验室主机上传。
+# HEADSCALE_API_KEY 或 LAB_TAILNET_IP 未配置时下发接口返回 503，客户端回退 HTTPS 上传。
+HEADSCALE_URL = os.environ.get(
+    "HEADSCALE_URL", "https://headscale.alethicinsight.com").rstrip("/")
+HEADSCALE_API_KEY = os.environ.get("HEADSCALE_API_KEY", "")
+HEADSCALE_USER_ID = int(os.environ.get("HEADSCALE_USER_ID", "2"))
+LAB_TAILNET_IP = os.environ.get("LAB_TAILNET_IP", "")
+
 
 def effective_admin_path() -> str:
     return ADMIN_PUBLIC_PATH or (PUBLIC_PREFIX + "/admin")
