@@ -105,7 +105,7 @@ env 需在 `/etc/alethic-recruitment.env` 追加：
 
 ```
 ALE_THIC_ROLE=edge
-LAB_ORIGIN_URL=https://lab-origin.alethicinsight.com/recruitment
+LAB_ORIGIN_URL=https://lab-origin.alethicinsight.com  # 注意：不带 /recruitment 前缀，lab 的 API 挂在根路径
 STAGING_SECRET=<与 lab 一致的强随机密钥>
 # lab 回源若挂 CF Access：
 CF_ACCESS_CLIENT_ID=...
