@@ -63,6 +63,11 @@ except ImportError:
 ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024  # 补充材料 zip 上限 50MB（与云端一致）
 EXPORT_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 手动提供的会话导出文件上限 2GB（清洗器已流式化）
 
+# 机试包自身版本（OTA 检测用）：格式 YYYY.M.D-N，与云端
+# server/static/kit-version.json 的 version 按 int 元组比较。发新安装包时
+# 同步抬高这里与 kit-version.json（步骤见 README「维护」段）。
+KIT_VERSION = "2026.10.13-1"
+
 DEFAULT_CONFIG = {
     "cloud_base": "https://alethicinsight.com/recruitment",
     "campaign_id": "2026autumn",
@@ -1067,6 +1072,218 @@ def start_upload_worker(interval: float = UPLOAD_RETRY_INTERVAL) -> None:
                      name="upload-retry", daemon=True).start()
 
 
+# ---------- OTA 新版本检测（非阻断：后台 daemon，任何失败只记日志） ----------
+# 启动约 5s 后首查、之后每 30min 一查 {cloud_base}/static/kit-version.json；
+# 比本包 KIT_VERSION 新 → 写 state["kit_update"]，页面顶部出现可关闭的非模态
+# 横幅（考生可无视继续考试）。「下载新版」经 curl（CF 加固通道）把新安装包
+# 下到「下载」文件夹，sha256 非空时校验，不符即删文件报白话；绝不自动替换
+# 运行中的 exe、绝不自动重启/退出考试进程。考场断网可用
+# ALE_THIC_KIT_UPDATE=off 整体关闭检测。
+
+KIT_UPDATE_FIRST_DELAY = 5.0        # 启动后首查延迟（秒）
+KIT_UPDATE_INTERVAL = 30 * 60.0     # 之后每 30min 一查
+KIT_UPDATE_JITTER_RATIO = 0.05      # 周期抖动，防多台考试机扎堆
+KIT_UPDATE_ENV = "ALE_THIC_KIT_UPDATE"  # =off 时整体关闭检测（考场断网场景）
+KIT_DOWNLOAD_TIMEOUT = 600          # 安装包下载超时（秒）
+
+
+def _kit_update_enabled() -> bool:
+    return os.environ.get(KIT_UPDATE_ENV, "").strip().lower() not in (
+        "off", "0", "false")
+
+
+def _kit_version_tuple(v: str) -> tuple[int, ...] | None:
+    """"YYYY.M.D-N" → (2026, 10, 13, 1)；格式不符返回 None。"""
+    m = re.fullmatch(r"(\d{4})\.(\d{1,2})\.(\d{1,2})-(\d+)", str(v).strip())
+    if not m:
+        return None
+    return tuple(int(x) for x in m.groups())
+
+
+def kit_version_newer(remote: str, local: str = KIT_VERSION) -> bool:
+    """remote 版本是否比 local 新（int 元组比较，跨月/跨年自然正确）。"""
+    r, l = _kit_version_tuple(remote), _kit_version_tuple(local)
+    return r is not None and l is not None and r > l
+
+
+def check_kit_update(cfg: dict) -> dict | None:
+    """GET {cloud_base}/static/kit-version.json，比 KIT_VERSION 新则返回
+    {version, url, notes, sha256}，否则 None。网络失败抛 CloudError
+    （调用方静默吞掉）；响应不是合法 JSON 记日志后按「无更新」处理。"""
+    try:
+        _, data = cloud_request(cfg, "GET", "/static/kit-version.json")
+    except ValueError:
+        _log("机试包版本信息不是合法 JSON，本次检测跳过")
+        return None
+    if not isinstance(data, dict):
+        _log(f"机试包版本信息结构异常，本次检测跳过: {type(data).__name__}")
+        return None
+    version = str(data.get("version") or "").strip()
+    if not version or not kit_version_newer(version):
+        return None
+    return {
+        "version": version,
+        "url": str(data.get("url") or "").strip(),
+        "notes": str(data.get("notes") or ""),
+        "sha256": str(data.get("sha256") or "").strip(),
+    }
+
+
+def _kit_update_worker(stop: threading.Event, interval: float,
+                       first_delay: float = KIT_UPDATE_FIRST_DELAY) -> None:
+    """版本检测循环：先等 first_delay 首查，之后每 interval（+抖动）一查。
+    单轮任何异常只记日志，循环不死；stop 置位后尽快退出（测试用）。"""
+    if stop.wait(first_delay):
+        return
+    while not stop.is_set():
+        try:
+            info = check_kit_update(load_config())
+            state = load_state()
+            if info:
+                old = state.get("kit_update") or {}
+                # 同一版本复检：保住已下载完成的记录（不覆盖 downloaded_path）
+                if old.get("version") == info["version"] \
+                        and old.get("downloaded_path"):
+                    info["downloaded_path"] = old["downloaded_path"]
+                state["kit_update"] = info
+                save_state(state)
+                _log(f"检测到机试包新版本 {info['version']}"
+                     f"（当前 {KIT_VERSION}），页面将提示下载")
+            elif state.pop("kit_update", None) is not None:
+                save_state(state)  # 云端版本回落/撤下：摘掉过期横幅
+        except Exception as exc:
+            _log(f"机试包版本检测失败（静默，下轮继续）: {exc}")
+        stop.wait(interval + random.uniform(
+            0, interval * KIT_UPDATE_JITTER_RATIO))
+
+
+def start_kit_update_worker(interval: float = KIT_UPDATE_INTERVAL,
+                            first_delay: float = KIT_UPDATE_FIRST_DELAY) -> None:
+    """后台版本检测：不阻断启动，检测失败对考试零影响。"""
+    if not _kit_update_enabled():
+        _log(f"机试包版本检测已关闭（{KIT_UPDATE_ENV}=off）")
+        return
+    stop = threading.Event()  # 常驻 daemon，随进程退出，不主动停
+    threading.Thread(target=_kit_update_worker,
+                     args=(stop, interval, first_delay),
+                     name="kit-update-check", daemon=True).start()
+
+
+def _known_folder(guid_str: str) -> Path | None:
+    """SHGetKnownFolderPath 取 Windows 已知文件夹（兼容 OneDrive 重定向，
+    与 installer 取真实桌面同一做法）；非 Windows 或失败返回 None。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import byref, c_ulong, c_void_p
+        from ctypes import c_ubyte as _c_ubyte
+        u = uuid.UUID(guid_str)
+
+        class _GUID(ctypes.Structure):
+            _fields_ = [("Data1", c_ulong), ("Data2", ctypes.c_ushort),
+                        ("Data3", ctypes.c_ushort), ("Data4", _c_ubyte * 8)]
+
+        guid = _GUID(u.fields[0], u.fields[1], u.fields[2],
+                     (_c_ubyte * 8)(*u.bytes[8:]))
+        p = c_void_p()
+        hr = ctypes.windll.shell32.SHGetKnownFolderPath(
+            byref(guid), 0, None, byref(p))
+        if hr != 0 or not p.value:
+            return None
+        try:
+            return Path(ctypes.wstring_at(p))
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(p)
+    except Exception:
+        return None
+
+
+def downloads_dir() -> Path:
+    """考生「下载」文件夹：FOLDERID_Downloads（OneDrive 重定向也拿真路径），
+    拿不到回退 ~/Downloads。"""
+    d = _known_folder("374DE290-123F-4565-9164-39C4925E467B")
+    return d if d is not None else Path.home() / "Downloads"
+
+
+def _friendly_download_error(exc: CloudError) -> str:
+    """新版安装包下载失败的白话（与 _friendly_upload_error 同款口径，
+    强调不影响继续考试）。"""
+    if getattr(exc, "friendly", False):
+        return str(exc)
+    if exc.status in (0, None) or "无法连接" in str(exc):
+        return ("网络不通，没能下载新版安装包。不影响继续考试；"
+                "恢复网络后再点「下载新版」即可。")
+    return ("新版安装包暂时下载失败。不影响继续考试；"
+            "稍后再点「下载新版」重试，多次失败请联系组织者。")
+
+
+def download_kit_installer(cfg: dict, info: dict,
+                           dest_dir: Path | None = None) -> Path:
+    """把新版安装包下载到「下载」文件夹（curl 传输，CF 前置走加固重试通道）。
+    sha256 非空时校验，不符即删文件抛白话 CloudError。成功返回落盘路径。"""
+    url = str(info.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise CloudError("新版安装包的下载地址缺失或不正确，请联系组织者处理。",
+                         friendly=True)
+    dest_dir = Path(dest_dir) if dest_dir is not None else downloads_dir()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    name = _sanitize_filename(
+        f"AlethicInsight机试安装包-{info.get('version') or 'new'}") + ".exe"
+    dest = dest_dir / name
+    if _http_transport(url) == "curl":
+        exe = _curl_exe()
+        if not exe:
+            raise CloudError("这台电脑缺少系统自带的 curl 组件，无法下载新版安装包；"
+                             "不影响继续考试，请联系组织者处理。", friendly=True)
+        argv = [exe, "-H", "Accept: application/octet-stream", url]
+        if _is_cf_fronted(url):  # CF 前置：退避重试，绝不回退 urllib
+            code, raw = _curl_exec_cf(argv, timeout=KIT_DOWNLOAD_TIMEOUT, url=url)
+        else:
+            code, raw = _curl_exec(argv, timeout=KIT_DOWNLOAD_TIMEOUT)
+        if not 200 <= code < 300:
+            raise CloudError(f"下载失败（HTTP {code}）", status=code)
+        dest.write_bytes(raw)
+    else:
+        try:  # 非 CF 目标的 urllib 兜底
+            with urllib.request.urlopen(url, timeout=KIT_DOWNLOAD_TIMEOUT) as resp:
+                dest.write_bytes(resp.read())
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise CloudError(f"无法连接下载地址：{exc}") from None
+    want = str(info.get("sha256") or "").strip().lower()
+    if want:
+        got = hashlib.sha256(dest.read_bytes()).hexdigest()
+        if got != want:
+            dest.unlink(missing_ok=True)
+            raise CloudError("下载的安装包校验不一致（文件可能已损坏），"
+                             "已自动删除该文件，请重新点「下载新版」；"
+                             "多次失败请联系组织者。", friendly=True)
+    return dest
+
+
+def _open_in_folder(path: Path) -> bool:
+    """在文件管理器里打开文件所在文件夹并选中该文件（Windows explorer /select），
+    失败回退打开所在文件夹/浏览器兜底链。"""
+    try:
+        if os.name == "nt":
+            subprocess.Popen(["explorer", "/select,", str(path)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+    except OSError:
+        pass
+    try:
+        if os.name == "nt":
+            os.startfile(str(path.parent))  # noqa: S606 仅打开本地文件夹
+            return True
+    except OSError:
+        pass
+    try:
+        return open_browser(path.parent.as_uri())
+    except (OSError, ValueError):
+        return False
+
+
+
 # ---------- Kimi Code 会话定位与导出 ----------
 
 def kimi_home(cfg: dict) -> Path:
@@ -1998,6 +2215,14 @@ PAGE = """<!DOCTYPE html>
          max-width: 880px; color: #222; overflow-x: hidden; }
   #banner { font-size: 12px; color: #666; background: #f5f5f0; border-bottom: 1px solid #e5e5e0;
             margin: 0 -16px 12px; padding: 6px 16px; line-height: 1.6; }
+  #kit-update-banner { font-size: 14px; color: #5a4a00; background: #fdf6e3;
+            border: 1px solid #e0c97f; border-radius: 8px; margin: 0 0 12px;
+            padding: 8px 14px; line-height: 1.7; }
+  #kit-update-banner .close { float: right; background: none; color: #8a7a3a;
+            font-size: 17px; padding: 0 6px; }
+  #kit-update-banner .dl { background: #b8860b; font-size: 14px; padding: 4px 14px;
+            border-radius: 6px; margin-left: 10px; }
+  #kit-update-done-text { word-break: break-all; }
   h1 { font-size: 24px; text-align: center; } h2 { font-size: 19px; margin-top: 24px; }
   .card { border: 1px solid #ddd; border-radius: 10px; padding: 18px 22px; margin: 14px 0; }
   button { cursor: pointer; border: 0; border-radius: 8px; background: #2456c8; color: #fff; }
@@ -2057,6 +2282,17 @@ PAGE = """<!DOCTYPE html>
   Kimi Code / opencode 为第三方软件，与本社团无关；opencode 的免费模型是 OpenCode Zen
   的限时免费型号，首次使用需联网注册 Zen 账号并用 opencode auth login 登录后方可使用；
   断网时清洗后的记录会自动保存在 pending_upload 文件夹，联网后自动补传。
+</div>
+<div id="kit-update-banner" class="hidden">
+  <button class="close" title="关闭本提示" onclick="dismissKitUpdate()">✕</button>
+  <b id="kit-update-text"></b>
+  <span class="muted">（不影响当前考试，可稍后再处理）</span>
+  <button id="kit-update-btn" class="dl" onclick="downloadKitUpdate()">下载新版</button>
+  <span id="kit-update-msg" class="err" style="font-size:13px"></span>
+  <div id="kit-update-done" class="hidden">
+    <div id="kit-update-done-text"></div>
+    <button class="secondary" onclick="openKitUpdateFolder()">打开所在文件夹</button>
+  </div>
 </div>
 <h1>Alethic Insight 社团招新 · 机试</h1>
 <div id="err" class="err"></div>
@@ -2349,6 +2585,65 @@ function copyPath(text, btn) {
 
 function showNote(msg) { document.getElementById("note").textContent = msg || ""; }
 
+/* OTA 新版本横幅：state.kit_update 由后台检测线程写入；考生可关闭/无视，
+   关闭按版本号记忆（sessionStorage，仅本次浏览器会话）。绝不自动下载/重启。 */
+function renderKitUpdate() {
+  const el = document.getElementById("kit-update-banner");
+  if (!el) return;
+  const info = state.kit_update;
+  if (!info || !info.version
+      || sessionStorage.getItem("kitUpdateDismissed") === info.version) {
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+  document.getElementById("kit-update-text").textContent =
+    "新机试包版本 " + info.version + " 可用" + (info.notes ? "：" + info.notes : "");
+  const done = document.getElementById("kit-update-done");
+  const btn = document.getElementById("kit-update-btn");
+  if (info.downloaded_path) {
+    btn.classList.add("hidden");
+    done.classList.remove("hidden");
+    document.getElementById("kit-update-done-text").textContent =
+      "已下载到「下载」文件夹：" + info.downloaded_path
+      + "。请先完全关闭本考试系统（关掉黑色窗口），再运行新的安装程序完成升级。";
+  } else {
+    btn.classList.remove("hidden");
+    done.classList.add("hidden");
+  }
+}
+
+function dismissKitUpdate() {
+  const info = state.kit_update || {};
+  if (info.version) sessionStorage.setItem("kitUpdateDismissed", info.version);
+  hide("kit-update-banner");
+}
+
+async function downloadKitUpdate() {
+  const btn = document.getElementById("kit-update-btn");
+  const msg = document.getElementById("kit-update-msg");
+  msg.textContent = "";
+  btn.disabled = true;
+  msg.textContent = "正在下载新版安装包，请稍候…";
+  msg.style.color = "#5a4a00";
+  try {
+    const data = await api("/api/kit_update/download", {});
+    if (data.kit_update) { state.kit_update = data.kit_update; }
+    msg.textContent = "";
+    renderKitUpdate();
+  } catch (e) {
+    msg.style.color = "";
+    msg.textContent = e.message;
+  } finally { btn.disabled = false; }
+}
+
+async function openKitUpdateFolder() {
+  const msg = document.getElementById("kit-update-msg");
+  msg.textContent = "";
+  try { await api("/api/kit_update/open_folder", {}); }
+  catch (e) { msg.textContent = e.message; }
+}
+
 function renderDomainGuide() {
   const dg = document.getElementById("domain-guide");
   if (!dg) return;
@@ -2426,6 +2721,7 @@ function unhide(id) { document.getElementById(id).classList.remove("hidden"); }
 function render() {
   for (const el of document.querySelectorAll("body > div[id^=stage]")) el.classList.add("hidden");
   hide("finish-busy"); hide("finish-result-success"); hide("finish-result-fail");
+  renderKitUpdate();
   renderDomainGuide();
   const stage = state.stage || "";
   if (stage === "uploaded" || stage === "finished") {
@@ -3682,6 +3978,10 @@ class ExamHandler(BaseHTTPRequestHandler):
                 return self._open_account_page()
             if self.path == "/api/submit_project":
                 return self._submit_project()
+            if self.path == "/api/kit_update/download":
+                return self._kit_update_download()
+            if self.path == "/api/kit_update/open_folder":
+                return self._kit_update_open_folder()
             self._send_json({"error": "not found"}, status=404)
         except CloudError as exc:
             self._error(exc)
@@ -3792,6 +4092,10 @@ class ExamHandler(BaseHTTPRequestHandler):
                     state["uploaded"] = True
             except CloudError:
                 pass
+        # 登录整体重建 state：OTA 版本提示不属于考试会话，跨登录保留
+        prev = load_state()
+        if prev.get("kit_update"):
+            state["kit_update"] = prev["kit_update"]
         save_state(state)
         self._send_json(state)
 
@@ -4463,6 +4767,47 @@ class ExamHandler(BaseHTTPRequestHandler):
         return self._send_json(
             {"error": f"没能自动打开浏览器，请手动访问：{url}"}, status=500)
 
+    def _kit_update_download(self):
+        """「下载新版」：按 state.kit_update 的信息把新安装包下到「下载」文件夹
+        （curl 传输 + sha256 校验）。失败走白话错误，绝不影响考试进程。"""
+        state = load_state()
+        info = state.get("kit_update") or {}
+        if not info.get("version"):
+            return self._send_json(
+                {"error": "当前没有可下载的新版本信息，请刷新页面后再试"},
+                status=400)
+        try:
+            dest = download_kit_installer(self.cfg, info)
+        except CloudError as exc:
+            return self._send_json(
+                {"error": _friendly_download_error(exc)},
+                status=exc.status or 502)
+        except Exception as exc:  # 兜底：本地落盘失败等
+            _log(f"新版安装包下载失败: {exc!r}")
+            return self._send_json(
+                {"error": _friendly_download_error(CloudError(str(exc)))},
+                status=502)
+        state["kit_update"] = {**info, "downloaded_path": str(dest)}
+        save_state(state)
+        self._send_json({
+            "ok": True,
+            "kit_update": state["kit_update"],
+            "hint": f"已下载到「下载」文件夹：{dest}",
+        })
+
+    def _kit_update_open_folder(self):
+        """「打开所在文件夹」：文件管理器定位到已下载的新安装包。"""
+        state = load_state()
+        path = str((state.get("kit_update") or {}).get("downloaded_path") or "")
+        if not path:
+            return self._send_json(
+                {"error": "还没有下载完成的安装包，请先点「下载新版」"}, status=400)
+        p = Path(path)
+        if _open_in_folder(p):
+            return self._send_json({"ok": True})
+        return self._send_json(
+            {"error": f"没能自动打开文件夹，请手动打开：{p.parent}"}, status=500)
+
     def _retry_upload(self):
         state = load_state()
         if _slot_count(state) > 1:
@@ -4643,11 +4988,13 @@ def main():
         server.daemon_threads = True
         url = f"http://127.0.0.1:{cfg['exam_port']}"
         _log(f"机试页面: {url}")
+        _log(f"机试包版本: {KIT_VERSION}")
         _log(f"云端: {cfg['cloud_base']}  届次: {cfg['campaign_id']}")
         _log(f"作答工具: {AGENT_LABELS[cfg['agent']]}  Web 指令: {agent_web_cmd(cfg)}")
         _log(f"考试工作目录: {agent_workdir(cfg)}")
         _log(">>> 如果浏览器没有自动打开，请手动在 Edge 地址栏输入：%s" % url)
         start_upload_worker()  # 断网/失败交卷的周期自动补传（每 60s 轮询）
+        start_kit_update_worker()  # OTA 新版本检测（后台 daemon，失败静默）
         if "--no-browser" not in sys.argv:
             # 自动开默认浏览器（安装器/启动 bat 不再重复开页面）。
             # 注意：threading.Timer 不接受 name= 参数（只有 Thread 才收），勿加。

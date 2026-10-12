@@ -2235,6 +2235,410 @@ class TestCloudflareTransport(unittest.TestCase):
         self.assertIn("无法连接", str(cm.exception))
 
 
+class TestKitVersionCompare(unittest.TestCase):
+    """版本元组比较：YYYY.M.D-N → int 元组，跨月/跨年自然正确。"""
+
+    def test_parse(self):
+        self.assertEqual(es._kit_version_tuple("2026.10.13-1"), (2026, 10, 13, 1))
+        self.assertIsNone(es._kit_version_tuple("2026-10-13"))
+        self.assertIsNone(es._kit_version_tuple("v1.2"))
+        self.assertIsNone(es._kit_version_tuple(""))
+
+    def test_newer_patch(self):
+        self.assertTrue(es.kit_version_newer("2026.10.13-2", "2026.10.13-1"))
+        self.assertFalse(es.kit_version_newer("2026.10.13-1", "2026.10.13-2"))
+
+    def test_newer_cross_month_and_year(self):
+        self.assertTrue(es.kit_version_newer("2026.11.1-1", "2026.10.13-9"))
+        self.assertTrue(es.kit_version_newer("2027.1.1-1", "2026.12.31-9"))
+        self.assertFalse(es.kit_version_newer("2026.9.30-5", "2026.10.13-1"))
+
+    def test_same_version_not_newer(self):
+        self.assertFalse(es.kit_version_newer("2026.10.13-1", "2026.10.13-1"))
+
+    def test_malformed_remote_not_newer(self):
+        self.assertFalse(es.kit_version_newer("not-a-version"))
+
+    def test_kit_version_constant_format(self):
+        self.assertIsNotNone(es._kit_version_tuple(es.KIT_VERSION))
+
+
+class TestKitUpdateCheck(unittest.TestCase):
+    """检测逻辑：mock cloud_request 覆盖新版/同版/网络失败/非法 JSON。"""
+
+    def _cfg(self):
+        return dict(es.DEFAULT_CONFIG)
+
+    def test_newer_version_returns_info(self):
+        payload = {"version": "2026.10.14-1",
+                   "url": "https://example.com/kit.exe",
+                   "sha256": "ab", "notes": "修复问题"}
+        with mock.patch.object(es, "cloud_request",
+                               return_value=(200, payload)):
+            info = es.check_kit_update(self._cfg())
+        self.assertEqual(info["version"], "2026.10.14-1")
+        self.assertEqual(info["url"], "https://example.com/kit.exe")
+        self.assertEqual(info["sha256"], "ab")
+        self.assertEqual(info["notes"], "修复问题")
+
+    def test_same_or_older_version_returns_none(self):
+        for v in (es.KIT_VERSION, "2026.10.12-9", "2025.1.1-1"):
+            with mock.patch.object(es, "cloud_request",
+                                   return_value=(200, {"version": v})):
+                self.assertIsNone(es.check_kit_update(self._cfg()), v)
+
+    def test_network_failure_raises(self):
+        with mock.patch.object(es, "cloud_request",
+                               side_effect=es.CloudError("无法连接云端")):
+            with self.assertRaises(es.CloudError):
+                es.check_kit_update(self._cfg())
+
+    def test_invalid_json_returns_none(self):
+        with mock.patch.object(es, "cloud_request",
+                               side_effect=ValueError("bad json")), \
+                mock.patch.object(es, "_log"):
+            self.assertIsNone(es.check_kit_update(self._cfg()))
+
+    def test_non_dict_payload_returns_none(self):
+        with mock.patch.object(es, "cloud_request",
+                               return_value=(200, ["x"])), \
+                mock.patch.object(es, "_log"):
+            self.assertIsNone(es.check_kit_update(self._cfg()))
+
+    def test_malformed_remote_version_returns_none(self):
+        with mock.patch.object(es, "cloud_request",
+                               return_value=(200, {"version": "v2"})):
+            self.assertIsNone(es.check_kit_update(self._cfg()))
+
+
+class TestKitUpdateWorker(unittest.TestCase):
+    """检测 worker：新版写入 state；云端回落摘掉；单轮异常不死；env 关闭不启动。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.orig_state = es.STATE_PATH
+        es.STATE_PATH = Path(self.tmp.name) / "state.json"
+        self.stop = threading.Event()
+        self.thread = None
+
+    def tearDown(self):
+        self.stop.set()
+        if self.thread is not None:
+            self.thread.join(timeout=5)
+        es.STATE_PATH = self.orig_state
+        self.tmp.cleanup()
+
+    def _run_worker_once(self, info, predicate, interval=0.02):
+        """起一个首轮延迟为 0 的 worker，轮询等待 predicate（读 state 文件）成立。"""
+        orig_check = es.check_kit_update
+
+        def fake(cfg):
+            if isinstance(info, Exception):
+                raise info
+            return info
+
+        es.check_kit_update = fake
+        try:
+            self.thread = threading.Thread(
+                target=es._kit_update_worker,
+                args=(self.stop, interval, 0), daemon=True)
+            self.thread.start()
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                if predicate():
+                    return
+                time.sleep(0.02)
+            self.fail("worker 未在限定时间内完成预期写入")
+        finally:
+            es.check_kit_update = orig_check
+
+    def _read_state(self):
+        return json.loads(es.STATE_PATH.read_text(encoding="utf-8"))
+
+    def test_new_version_written_to_state(self):
+        info = {"version": "2026.10.14-1", "url": "https://x/kit.exe",
+                "notes": "n", "sha256": ""}
+        es.STATE_PATH.write_text(json.dumps({"stage": ""}), encoding="utf-8")
+        with mock.patch.object(es, "load_config",
+                               return_value=dict(es.DEFAULT_CONFIG)), \
+                mock.patch.object(es, "_log"):
+            self._run_worker_once(info, lambda: "kit_update" in self._read_state())
+        self.assertEqual(self._read_state()["kit_update"]["version"],
+                         "2026.10.14-1")
+
+    def test_first_delay_respected(self):
+        es.STATE_PATH.write_text(json.dumps({"stage": ""}), encoding="utf-8")
+        self.stop.set()  # 立即置位：first_delay 等待应直接退出，不查不写
+        with mock.patch.object(es, "check_kit_update",
+                               side_effect=AssertionError("不应发起检测")):
+            es._kit_update_worker(self.stop, 0.05, first_delay=30)
+        self.assertNotIn("kit_update", self._read_state())
+
+    def test_same_version_clears_stale_banner(self):
+        es.STATE_PATH.write_text(json.dumps(
+            {"stage": "", "kit_update": {"version": "2026.10.14-1",
+                                         "url": "https://x"}},
+            ensure_ascii=False), encoding="utf-8")
+        with mock.patch.object(es, "load_config",
+                               return_value=dict(es.DEFAULT_CONFIG)), \
+                mock.patch.object(es, "_log"):
+            self._run_worker_once(
+                None,  # 云端已回落到同版：摘掉过期横幅
+                lambda: "kit_update" not in self._read_state())
+        self.assertNotIn("kit_update", self._read_state())
+
+    def test_worker_survives_round_exception(self):
+        es.STATE_PATH.write_text(json.dumps({"stage": ""}), encoding="utf-8")
+        calls = []
+        recovered = threading.Event()
+
+        def fake(cfg):
+            calls.append(1)
+            if len(calls) == 1:
+                raise es.CloudError("网络不通")
+            recovered.set()
+            return None
+
+        with mock.patch.object(es, "check_kit_update", side_effect=fake), \
+                mock.patch.object(es, "load_config",
+                                  return_value=dict(es.DEFAULT_CONFIG)), \
+                mock.patch.object(es, "_log"):
+            self.thread = threading.Thread(
+                target=es._kit_update_worker,
+                args=(self.stop, 0.02, 0), daemon=True)
+            self.thread.start()
+            self.assertTrue(recovered.wait(timeout=5), "单轮异常后循环未继续")
+        self.assertNotIn("kit_update", self._read_state())
+
+    def test_env_off_disables_worker(self):
+        with mock.patch.dict(os.environ,
+                             {es.KIT_UPDATE_ENV: "off"}), \
+                mock.patch.object(es, "_kit_update_worker") as w, \
+                mock.patch.object(es, "_log"):
+            es.start_kit_update_worker()
+            time.sleep(0.1)
+        self.assertFalse(w.called)
+
+    def test_start_spawns_daemon_thread(self):
+        with mock.patch.object(es, "_kit_update_worker") as w:
+            es.start_kit_update_worker(interval=999, first_delay=999)
+            deadline = time.time() + 5
+            while not w.called and time.time() < deadline:
+                time.sleep(0.02)
+        self.assertTrue(w.called)
+        self.assertEqual(w.call_args[0][1:], (999, 999))
+
+
+class TestKitUpdateDownload(unittest.TestCase):
+    """下载：curl 通道成功落盘；sha256 不符删文件报白话；网络失败白话。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dest_dir = Path(self.tmp.name) / "Downloads"
+        self.info = {"version": "2026.10.14-1",
+                     "url": "https://alethicinsight.com/dl/kit.exe",
+                     "notes": "", "sha256": ""}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _download(self, **info_over):
+        info = {**self.info, **info_over}
+        with mock.patch.object(es, "_curl_exe",
+                               return_value="C:/fake/curl.exe"):
+            return es.download_kit_installer(
+                dict(es.DEFAULT_CONFIG), info, dest_dir=self.dest_dir)
+
+    def test_success_via_cf_curl_channel(self):
+        body = b"PK-fake-installer"
+
+        def fake_cf(argv, input_data=None, timeout=60, url=""):
+            return 200, body
+
+        with mock.patch.object(es, "_curl_exec_cf", side_effect=fake_cf):
+            dest = self._download()
+        self.assertTrue(dest.exists())
+        self.assertEqual(dest.read_bytes(), body)
+        self.assertEqual(dest.parent, self.dest_dir)
+        self.assertIn("2026.10.14-1", dest.name)
+
+    def test_sha256_mismatch_deletes_file(self):
+        def fake_cf(argv, input_data=None, timeout=60, url=""):
+            return 200, b"tampered"
+
+        with mock.patch.object(es, "_curl_exec_cf", side_effect=fake_cf):
+            with self.assertRaises(es.CloudError) as cm:
+                self._download(sha256="0" * 64)
+        self.assertTrue(cm.exception.friendly)
+        self.assertIn("校验不一致", str(cm.exception))
+        self.assertEqual(list(self.dest_dir.glob("*.exe")), [])
+
+    def test_sha256_match_keeps_file(self):
+        body = b"good-bytes"
+        digest = hashlib.sha256(body).hexdigest()
+
+        def fake_cf(argv, input_data=None, timeout=60, url=""):
+            return 200, body
+
+        with mock.patch.object(es, "_curl_exec_cf", side_effect=fake_cf):
+            dest = self._download(sha256=digest)
+        self.assertTrue(dest.exists())
+
+    def test_network_failure_message(self):
+        with mock.patch.object(es, "_curl_exec_cf",
+                               side_effect=es.CloudError("无法连接云端：超时")):
+            with self.assertRaises(es.CloudError):
+                self._download()
+            msg = es._friendly_download_error(es.CloudError("无法连接云端：超时"))
+        self.assertIn("不影响继续考试", msg)
+
+    def test_missing_url_friendly(self):
+        with self.assertRaises(es.CloudError) as cm:
+            self._download(url="")
+        self.assertTrue(cm.exception.friendly)
+
+    def test_friendly_error_passthrough(self):
+        exc = es.CloudError("白话", friendly=True)
+        self.assertEqual(es._friendly_download_error(exc), "白话")
+
+
+class TestKitUpdateAPI(_LocalServerTestCase):
+    """端点：下载成功写 state.downloaded_path；失败白话 502；未检测到时 400。"""
+
+    def setUp(self):
+        self.install_tmp_dirs()
+        self.write_state()
+        self.start_server()
+
+    def tearDown(self):
+        self.stop_server()
+        self.restore_dirs()
+
+    def _post(self, path):
+        req = urllib.request.Request(self.url(path), data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json"})
+        return urllib.request.urlopen(req)
+
+    def _write_kit_update(self, info):
+        state = self.read_state()
+        state["kit_update"] = info
+        es.STATE_PATH.write_text(json.dumps(state, ensure_ascii=False),
+                                 encoding="utf-8")
+
+    def test_download_without_update_info_400(self):
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post("/api/kit_update/download")
+        self.assertEqual(cm.exception.code, 400)
+        cm.exception.close()
+
+    def test_download_success_updates_state(self):
+        fake_dest = self.root / "Downloads" / "kit.exe"
+
+        def fake_dl(cfg, info, dest_dir=None):
+            fake_dest.parent.mkdir(parents=True, exist_ok=True)
+            fake_dest.write_bytes(b"exe")
+            return fake_dest
+
+        self._write_kit_update({"version": "2026.10.14-1",
+                                "url": "https://x/kit.exe",
+                                "notes": "", "sha256": ""})
+        with mock.patch.object(es, "download_kit_installer",
+                               side_effect=fake_dl):
+            with self._post("/api/kit_update/download") as resp:
+                out = json.loads(resp.read())
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["kit_update"]["downloaded_path"], str(fake_dest))
+        self.assertEqual(self.read_state()["kit_update"]["downloaded_path"],
+                         str(fake_dest))
+
+    def test_download_failure_friendly(self):
+        self._write_kit_update({"version": "2026.10.14-1",
+                                "url": "https://x/kit.exe",
+                                "notes": "", "sha256": ""})
+        with mock.patch.object(es, "download_kit_installer",
+                               side_effect=es.CloudError("无法连接云端")):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                self._post("/api/kit_update/download")
+            self.assertEqual(cm.exception.code, 502)
+            body = json.loads(cm.exception.read())
+            cm.exception.close()
+        self.assertIn("不影响继续考试", body["error"])
+        self.assertNotIn("downloaded_path",
+                         self.read_state().get("kit_update", {}))
+
+    def test_open_folder_without_download_400(self):
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post("/api/kit_update/open_folder")
+        self.assertEqual(cm.exception.code, 400)
+        cm.exception.close()
+
+    def test_open_folder_after_download(self):
+        fake_dest = self.root / "Downloads" / "kit.exe"
+        self._write_kit_update({"version": "2026.10.14-1",
+                                "url": "https://x/kit.exe", "notes": "",
+                                "sha256": "", "downloaded_path": str(fake_dest)})
+        with mock.patch.object(es, "_open_in_folder", return_value=True) as op:
+            with self._post("/api/kit_update/open_folder") as resp:
+                out = json.loads(resp.read())
+        self.assertTrue(out["ok"])
+        op.assert_called_once()
+
+    def test_update_check_failure_does_not_affect_serving(self):
+        # 启动路径在云端不可达时不阻塞：检测线程异常静默，服务照常应答
+        stop = threading.Event()
+        with mock.patch.object(es, "check_kit_update",
+                               side_effect=es.CloudError("云端不可达")), \
+                mock.patch.object(es, "load_config",
+                                  return_value=dict(es.DEFAULT_CONFIG)), \
+                mock.patch.object(es, "_log"):
+            t = threading.Thread(target=es._kit_update_worker,
+                                 args=(stop, 0.02, 0), daemon=True)
+            t.start()
+            time.sleep(0.1)
+            with urllib.request.urlopen(self.url("/api/health")) as resp:
+                out = json.loads(resp.read())
+            stop.set()
+            t.join(timeout=5)
+        self.assertTrue(out["ok"])
+
+
+class TestKitUpdatePage(unittest.TestCase):
+    """横幅渲染存在性：可关闭非模态横幅 + 下载/打开文件夹入口。"""
+
+    def test_banner_markup_and_hooks(self):
+        self.assertIn('id="kit-update-banner"', es.PAGE)
+        self.assertIn("下载新版", es.PAGE)
+        self.assertIn("打开所在文件夹", es.PAGE)
+        self.assertIn("dismissKitUpdate", es.PAGE)
+        self.assertIn("/api/kit_update/download", es.PAGE)
+        self.assertIn("/api/kit_update/open_folder", es.PAGE)
+        self.assertIn("renderKitUpdate();", es.PAGE)
+        # 非模态、不阻断：横幅默认隐藏，由 state.kit_update 驱动
+        self.assertIn('id="kit-update-banner" class="hidden"', es.PAGE)
+
+    def test_banner_copy_is_plain(self):
+        self.assertIn("不影响当前考试", es.PAGE)
+        self.assertIn("新机试包版本", es.PAGE)
+
+    def test_page_served_with_banner(self):
+        tmp = tempfile.TemporaryDirectory()
+        orig_state = es.STATE_PATH
+        es.STATE_PATH = Path(tmp.name) / "state.json"
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), es.ExamHandler)
+        httpd.cfg = dict(es.DEFAULT_CONFIG)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{httpd.server_address[1]}/") as resp:
+                html = resp.read().decode("utf-8")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            es.STATE_PATH = orig_state
+            tmp.cleanup()
+        self.assertIn('id="kit-update-banner"', html)
+
+
 class TestPageCopyM11(unittest.TestCase):
     """小白化页面文案钉死：声明条 / 大按钮 / 兜底入口。"""
 

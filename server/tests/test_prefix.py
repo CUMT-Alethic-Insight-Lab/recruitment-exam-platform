@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 from fastapi.testclient import TestClient
 
@@ -39,6 +40,15 @@ def test_deck_fallback_page_served(client):
     assert res.status_code == 200
     assert PREFIX_PLACEHOLDER not in res.text
     assert 'class="slide s-cover"' in res.text
+
+
+def test_kit_version_json_served(client):
+    # 机试包 OTA 版本源：纯静态文件，CF 缓存友好，考生端按此提示新版
+    res = client.get("/static/kit-version.json")
+    assert res.status_code == 200
+    data = res.json()
+    assert {"version", "url", "sha256", "notes"} <= set(data)
+    assert re.fullmatch(r"\d{4}\.\d{1,2}\.\d{1,2}-\d+", data["version"])
 
 
 def test_pages_without_prefix_have_no_placeholder(client, cid):
