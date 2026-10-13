@@ -1,6 +1,6 @@
 {
   "version": "2026.10.13-1",
-  "url": "",
-  "sha256": "",
-  "notes": ""
+  "url": "https://dl.alethicinsight.com/AlethicInsight-ExamKit-2026-setup.exe",
+  "sha256": "8c2dea2a1269d62ad1abb218dac4f4be8e2e95a75c7c34cd57d2bf157b1ebd8b",
+  "notes": "自动补传改为周期轮询、云端传输加固（curl 退避重试）、新增 OTA 新版本检测。"
 }
