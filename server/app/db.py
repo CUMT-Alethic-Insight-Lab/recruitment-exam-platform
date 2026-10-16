@@ -251,6 +251,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
     slot_cols = {r["name"] for r in conn.execute("PRAGMA table_info(interview_slot)")}
     if "booked_mode" not in slot_cols:
         conn.execute("ALTER TABLE interview_slot ADD COLUMN booked_mode TEXT")
+    # 同批次同起点仅允许一个槽：先清历史重复行（保留最早一行），再补唯一索引，
+    # 让 generate 并发重放 / 重复插入在数据库层被兜底拦截
+    conn.execute(
+        "DELETE FROM interview_slot WHERE rowid NOT IN"
+        " (SELECT MIN(rowid) FROM interview_slot GROUP BY campaign_id, start_at)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_interview_slot_campaign_start"
+        " ON interview_slot (campaign_id, start_at)"
+    )
     _migrate_account(conn)
 
 

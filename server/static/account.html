@@ -53,16 +53,68 @@
   border-radius: 2px; padding: 10px 12px; font-size: 14px; margin: 12px 0 4px;
 }
 
-/* 面试预约 */
-.booking-day { font-size: 13px; color: var(--muted); font-family: var(--font-mono); letter-spacing: 0.04em; margin: 12px 0 6px; }
-.booking-slots { display: flex; flex-wrap: wrap; gap: 8px; }
-.booking-slot {
-  display: inline-flex; align-items: center; gap: 8px;
-  border: 1px solid var(--line); border-radius: 2px; padding: 6px 10px;
-  font-size: 13.5px; font-family: var(--font-mono);
+/* 面试预约：课表式网格 */
+.bk-mine-box {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  border: 1px solid var(--line); border-left: 3px solid var(--primary); border-radius: 2px;
+  background: var(--panel); padding: 8px 12px; font-size: 14px; margin: 0 0 12px;
 }
-.booking-slot.taken { opacity: .55; }
-.booking-slot-note { color: var(--muted); font-size: 12px; }
+.bk-mine-box .k { color: var(--muted); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; flex-shrink: 0; }
+.bk-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
+.bk-mode { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 2px; overflow: hidden; }
+.bk-mode button {
+  border: none; background: transparent; padding: 4px 12px; cursor: pointer;
+  font-size: 13px; font-family: var(--font-body); color: var(--muted);
+}
+.bk-mode button + button { border-left: 1px solid var(--line-strong); }
+.bk-mode button.active { background: var(--primary); color: var(--paper); }
+.bk-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--muted); margin-left: auto; }
+.bk-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid transparent; }
+.bk-legend .lg-free i { background: var(--check-bg); border-color: var(--line-strong); }
+.bk-legend .lg-taken i { background: var(--surface-raised); }
+.bk-legend .lg-mine i { background: var(--primary); }
+.bk-scroll {
+  overflow: auto; max-height: 66vh;
+  border: 1px solid var(--line); border-radius: 3px;
+  -webkit-overflow-scrolling: touch;
+}
+.bk-grid { border-collapse: separate; border-spacing: 3px; width: 100%; table-layout: fixed; }
+/* 手机上 7 列挤不下 → 定宽横向滑动；桌面按卡片宽度均分，一屏看全一周 */
+@media (max-width: 640px) { .bk-grid { min-width: 720px; } }
+.bk-grid thead th {
+  position: sticky; top: 0; z-index: 2; background: var(--th-bg);
+  font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; color: var(--muted);
+  padding: 6px 4px; border-bottom: 1px solid var(--line-strong); text-align: center;
+}
+.bk-grid thead th .bk-dow { display: block; font-size: 12px; font-family: var(--font-body); color: var(--text); }
+.bk-grid thead th.is-today { color: var(--primary); box-shadow: inset 0 -2px 0 var(--primary); }
+.bk-grid th.bk-time { left: 0; width: 48px; z-index: 3; }
+.bk-time {
+  position: sticky; left: 0; background: var(--th-bg);
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--muted);
+  text-align: right; padding: 0 6px 0 2px; white-space: nowrap;
+}
+.bk-cell { height: 38px; }
+.bk-cell.empty { background: var(--grid-line); border-radius: 2px; }
+button.bk-slot {
+  width: 100%; height: 100%; padding: 2px 4px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  border-radius: 2px; border: 1px solid transparent; cursor: pointer;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.25;
+}
+button.bk-slot:focus-visible { outline-offset: -2px; }
+.bk-slot.free { background: var(--check-bg); border-color: var(--line-strong); color: var(--text); }
+.bk-slot.free:hover { background: var(--primary); border-color: var(--primary); color: var(--paper); }
+.bk-slot.taken { background: var(--surface-raised); color: var(--muted); cursor: not-allowed; }
+.bk-slot.mine { background: var(--primary); border-color: var(--primary-dark); color: var(--paper); font-weight: 600; }
+.bk-slot.pending { opacity: 0.65; cursor: progress; }
+.bk-slot .bk-tag { font-size: 10px; letter-spacing: 0.1em; font-family: var(--font-body); font-weight: 400; }
+.bk-stamp { font-size: 12px; color: var(--muted); font-family: var(--font-mono); margin-left: auto; }
+/* 手机上顶栏品牌+右侧按钮组会挤出几像素横向滚动（共享 topbar 既有小问题），此页兜底换行 */
+@media (max-width: 480px) {
+  .topbar-inner { grid-template-columns: 1fr auto; }
+  .topbar-right { grid-column: 1 / -1; justify-self: end; }
+}
 </style>
 </head>
 <body>
@@ -146,7 +198,7 @@ __TOPBAR__
     <div id="booking-body"></div>
     <p class="msg hidden" id="booking-msg"></p>
     <p class="hint" style="margin-top:10px">面试支持线上 / 线下，线下地点：计科楼 A302（人工智能实验室）。</p>
-    <p class="hint" style="margin-top:10px">如需改约，先取消当前预约再重新选择；时段如有特殊情况请联系管理员（QQ 招新群）。</p>
+    <p class="hint" style="margin-top:10px">点击空余色块即完成预约；点击「我的」色块可取消改约。占用状态每 30 秒自动刷新（也可手动刷新）；时段如有特殊情况请联系管理员（QQ 招新群）。</p>
   </div>
 
   <div class="card" id="guide-card">
@@ -624,8 +676,17 @@ async function loadAuthMe() {
   }
 }
 
-// ---------- 面试预约 ----------
+// ---------- 面试预约（课表式网格） ----------
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+const MODE_SHORT = { online: '线上', offline: '线下' };
+const BOOKING_POLL_MS = 30000;
+
+let bookingData = null;      // available 端点最近一次返回
+let bookingMode = 'offline'; // 点击空块时要预约的面试形式
+let bookingBusy = false;     // 预约/取消请求在途（抑制连点与轮询）
+let pendingBooking = false;  // 乐观更新在途（色块显示进行中样式）
+let bookingTimer = null;
+let bookingStamp = '';
 
 function parseIsoParts(iso) {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(iso || ''));
@@ -639,92 +700,203 @@ function fmtBookingRange(startIso, endIso) {
   return `${s.mo}月${s.d}日 ${s.hh}:${s.mm}–${e.hh}:${e.mm}`;
 }
 
-function fmtBookingDay(dateKey) { // '2026-10-17' -> '10月17日 周六'
-  const parts = dateKey.split('-').map(Number);
-  if (parts.length !== 3 || parts.some(isNaN)) return esc(dateKey);
-  const wd = new Date(parts[0], parts[1] - 1, parts[2]).getDay();
-  return `${parts[1]}月${parts[2]}日 周${WEEKDAYS[wd]}`;
-}
-
 function fmtBookingMode(mode) {
   if (mode === 'online') return ' · 线上面试';
   if (mode === 'offline') return ' · 线下面试（计科楼 A302 · 人工智能实验室）';
   return '';
 }
 
-async function loadBooking() {
-  const card = document.getElementById('booking-card');
-  if (forcedPwMode) { card.classList.add('hidden'); return; }
-  let data = null;
-  try {
-    const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/interview-slots/available`, {
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
-    if (res.status === 401) {
-      localStorage.removeItem(STUDENT_TOKEN_KEY);
-      location.replace('__PREFIX__/login');
-      return;
-    }
-    if (res.ok) data = await res.json(); // 403 无预约资格等：保持卡片隐藏
-  } catch (e) { /* 网络失败：保持卡片隐藏 */ }
-  if (!data) { card.classList.add('hidden'); return; }
-  renderBooking(data);
-  card.classList.remove('hidden');
+async function fetchAvailable() {
+  const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/interview-slots/available`, {
+    headers: { 'Authorization': 'Bearer ' + token }
+  });
+  if (res.status === 401) {
+    localStorage.removeItem(STUDENT_TOKEN_KEY);
+    location.replace('__PREFIX__/login');
+    return null;
+  }
+  return res.ok ? await res.json() : null; // 403 无预约资格等：调用方隐藏卡片
 }
 
-function renderBooking(data) {
+async function loadBooking() {
+  const card = document.getElementById('booking-card');
+  if (forcedPwMode) { card.classList.add('hidden'); stopBookingPolling(); return; }
+  const data = await fetchAvailable();
+  if (!data) { card.classList.add('hidden'); stopBookingPolling(); return; }
+  bookingData = data;
+  bookingStamp = new Date().toTimeString().slice(0, 8);
+  renderBooking();
+  card.classList.remove('hidden');
+  startBookingPolling();
+}
+
+function startBookingPolling() {
+  stopBookingPolling();
+  bookingTimer = setInterval(() => {
+    if (bookingBusy || pendingBooking || document.hidden || forcedPwMode) return;
+    if (document.getElementById('booking-card').classList.contains('hidden')) return;
+    refreshBookingData();
+  }, BOOKING_POLL_MS);
+}
+
+function stopBookingPolling() {
+  if (bookingTimer) { clearInterval(bookingTimer); bookingTimer = null; }
+}
+
+async function refreshBookingData() {
+  const data = await fetchAvailable();
+  if (!data) return; // 轮询失败静默保留旧数据，等下一轮
+  bookingData = data;
+  bookingStamp = new Date().toTimeString().slice(0, 8);
+  renderBooking();
+}
+
+async function manualRefreshBooking() {
+  await refreshBookingData();
+  showMsg('booking-msg', '已刷新最新占用。', false);
+}
+
+function mySlotId() {
+  return bookingData && bookingData.my_booking ? bookingData.my_booking.id : null;
+}
+
+function slotState(s) {
+  if (mySlotId() && s.id === mySlotId()) return 'mine';
+  if (s.taken) return 'taken';
+  return 'free';
+}
+
+function renderBooking() {
   const body = document.getElementById('booking-body');
-  const bk = data.my_booking;
-  if (bk) {
-    body.innerHTML = `
-      <div class="info-row"><span class="k">预约时间</span><span>${fmtBookingRange(bk.start_at, bk.end_at)}${fmtBookingMode(bk.booked_mode)}</span></div>
-      ${bk.note ? `<div class="info-row"><span class="k">备注</span><span>${esc(bk.note)}</span></div>` : ''}
-      <div style="margin-top:12px"><button class="btn small secondary" id="booking-cancel-btn">取消预约</button></div>`;
-    document.getElementById('booking-cancel-btn').addEventListener('click', cancelBooking);
-    return;
-  }
-  const slots = Array.isArray(data.slots) ? data.slots : [];
+  if (!bookingData) return;
+  const bk = bookingData.my_booking;
+  const slots = Array.isArray(bookingData.slots) ? bookingData.slots : [];
+
+  const mineBox = `
+    <div class="bk-mine-box">
+      <span class="k">我的预约</span>
+      ${bk
+        ? `<strong>${fmtBookingRange(bk.start_at, bk.end_at)}</strong>
+           <span>${esc(fmtBookingMode(bk.booked_mode).replace(' · ', ''))}</span>
+           ${bk.note ? `<span class="hint" style="margin:0">备注：${esc(bk.note)}</span>` : ''}
+           <button class="btn small secondary" id="bk-cancel-btn">取消预约</button>`
+        : '<span>暂未预约——点击下方空余色块即完成预约。</span>'}
+      <button class="btn small secondary" id="bk-refresh-btn">刷新</button>
+      <span class="bk-stamp">更新于 ${bookingStamp}</span>
+    </div>`;
+
   if (!slots.length) {
-    body.innerHTML = '<p class="hint">暂无可预约时段，请等待管理员放出新时段或关注 QQ 群通知。</p>';
+    body.innerHTML = `${mineBox}
+      <p class="hint">${bk ? '该时段之后暂无更多可预约时段。' : '暂无可预约时段，请等待管理员放出新时段或关注 QQ 群通知。'}</p>`;
+    bindBookingActions();
     return;
   }
-  const groups = new Map();
+
+  // 列 = 有槽位的日期（升序），行 = 全部槽起点（升序）；格子按 日期|起点 定位
+  const days = [...new Set(slots.map(s => String(s.start_at).slice(0, 10)))].sort();
+  const rows = [...new Set(slots.map(s => String(s.start_at).slice(11, 16)))].sort();
+  const byDayTime = new Map();
   for (const s of slots) {
-    const day = String(s.start_at || '').slice(0, 10);
-    if (!groups.has(day)) groups.set(day, []);
-    groups.get(day).push(s);
+    byDayTime.set(`${String(s.start_at).slice(0, 10)}|${String(s.start_at).slice(11, 16)}`, s);
   }
-  let html = '';
-  for (const [day, list] of groups) {
-    html += `<div class="booking-day">${fmtBookingDay(day)}</div><div class="booking-slots">`;
-    html += list.map(s => {
-      const st = parseIsoParts(s.start_at), en = parseIsoParts(s.end_at);
-      const label = (st && en) ? `${st.hh}:${st.mm}–${en.hh}:${en.mm}` : esc(s.start_at);
-      const note = s.note ? `<span class="booking-slot-note">${esc(s.note)}</span>` : '';
-      if (s.taken) {
-        return `<span class="booking-slot taken">${label}${note}<button class="btn small secondary" disabled>已约满</button></span>`;
-      }
-      return `<span class="booking-slot">${label}${note}<button class="btn small" data-slot-id="${esc(String(s.id))}" data-mode="online">线上</button><button class="btn small secondary" data-slot-id="${esc(String(s.id))}" data-mode="offline">线下</button></span>`;
-    }).join('');
-    html += '</div>';
-  }
+  const dowOf = day => {
+    const [y, m, d] = day.split('-').map(Number);
+    return WEEKDAYS[new Date(y, m - 1, d).getDay()];
+  };
+  const pad2 = n => String(n).padStart(2, '0');
+  const now = new Date();
+  const todayKey = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  const hasNote = slots.some(s => s.note);
+
+  let html = `${mineBox}
+    <div class="bk-head">
+      <span style="font-size:12.5px;color:var(--muted)">面试形式</span>
+      <span class="bk-mode" id="bk-mode">
+        <button type="button" data-mode="offline" class="${bookingMode === 'offline' ? 'active' : ''}">线下</button>
+        <button type="button" data-mode="online" class="${bookingMode === 'online' ? 'active' : ''}">线上</button>
+      </span>
+      <span class="bk-legend">
+        <span class="lg-free"><i></i>可预约</span>
+        <span class="lg-taken"><i></i>已被约</span>
+        <span class="lg-mine"><i></i>我的</span>
+      </span>
+    </div>
+    <div class="bk-scroll">
+      <table class="bk-grid">
+        <thead><tr>
+          <th class="bk-time"></th>
+          ${days.map(d => `<th class="${d === todayKey ? 'is-today' : ''}"><span class="bk-dow">周${dowOf(d)}</span>${esc(d.slice(5).replace('-', '/'))}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${rows.map(t => `<tr>
+            <td class="bk-time">${esc(t)}</td>
+            ${days.map(d => {
+              const s = byDayTime.get(`${d}|${t}`);
+              if (!s) return '<td class="bk-cell empty"></td>';
+              const st = slotState(s);
+              const en = String(s.end_at || '').slice(11, 16);
+              const tip = `${d.slice(5).replace('-', '/')} ${t}–${en}${s.note ? ' · ' + s.note : ''}`;
+              if (st === 'taken') {
+                return `<td class="bk-cell"><button type="button" class="bk-slot taken" disabled title="${esc(tip)}（已被预约）">已约</button></td>`;
+              }
+              if (st === 'mine') {
+                return `<td class="bk-cell"><button type="button" class="bk-slot mine${pendingBooking ? ' pending' : ''}" data-slot-id="${esc(String(s.id))}" title="${esc(tip)}（点击取消预约）"><span class="bk-tag">我的</span>${esc(MODE_SHORT[bookingData.my_booking.booked_mode] || '')}</button></td>`;
+              }
+              return `<td class="bk-cell"><button type="button" class="bk-slot free" data-slot-id="${esc(String(s.id))}" title="${esc(tip)}（点击预约${MODE_SHORT[bookingMode] || ''}）">+</button></td>`;
+            }).join('')}
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    ${hasNote ? '<p class="hint">部分时段带备注（如会议号），悬停色块可查看。</p>' : ''}`;
   body.innerHTML = html;
-  body.querySelectorAll('button[data-slot-id]').forEach(btn => {
-    btn.addEventListener('click', () => bookSlot(btn.dataset.slotId, btn.dataset.mode));
+  bindBookingActions();
+}
+
+function bindBookingActions() {
+  const cancelBtn = document.getElementById('bk-cancel-btn');
+  if (cancelBtn) cancelBtn.addEventListener('click', cancelBooking);
+  const refreshBtn = document.getElementById('bk-refresh-btn');
+  if (refreshBtn) refreshBtn.addEventListener('click', manualRefreshBooking);
+  const modeBox = document.getElementById('bk-mode');
+  if (modeBox) {
+    modeBox.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      if (bookingMode === b.dataset.mode) return;
+      bookingMode = b.dataset.mode;
+      renderBooking();
+    }));
+  }
+  document.querySelectorAll('#booking-body button.bk-slot[data-slot-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const s = (bookingData.slots || []).find(x => String(x.id) === String(btn.dataset.slotId));
+      if (s) onSlotClick(s);
+    });
   });
 }
 
-async function bookSlot(slotId, mode) {
-  const confirmText = mode === 'offline'
-    ? '确定预约该时段的线下面试？地点：计科楼 A302（人工智能实验室）。预约成功后如需更改，请先取消再重新选择。'
-    : '确定预约该时段的线上面试？预约成功后如需更改，请先取消再重新选择。';
-  if (!confirm(confirmText)) return;
+async function onSlotClick(slot) {
+  if (bookingBusy) return;
+  const st = slotState(slot);
+  if (st === 'taken') return; // 灰块禁点
+  if (st === 'mine') { cancelBooking(); return; }
+  // 点块即预约：先乐观把块标成「我的」，失败回滚并提示
+  bookingBusy = true;
+  pendingBooking = true;
+  const prev = bookingData;
+  bookingData = {
+    ...bookingData,
+    my_booking: {
+      id: slot.id, start_at: slot.start_at, end_at: slot.end_at,
+      note: slot.note, booked_at: null, booked_mode: bookingMode
+    }
+  };
+  renderBooking();
   let ok = false, errText = '预约失败，请稍后重试';
   try {
-    const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/interview-slots/${encodeURIComponent(slotId)}/book`, {
+    const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/interview-slots/${encodeURIComponent(slot.id)}/book`, {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: mode })
+      body: JSON.stringify({ mode: bookingMode })
     });
     if (res.status === 401) {
       localStorage.removeItem(STUDENT_TOKEN_KEY);
@@ -738,15 +910,34 @@ async function bookSlot(slotId, mode) {
       if (typeof err.detail === 'string' && err.detail) errText = err.detail;
     }
   } catch (e) {
-    errText = '无法连接服务器，请检查网络后重试';
+    errText = '无法连接服务器，预约未成功';
   }
-  await loadBooking();
-  showMsg('booking-msg', ok ? '预约成功，请按时参加面试。' : errText, !ok);
+  pendingBooking = false;
+  if (ok) {
+    await loadBooking();
+    showMsg('booking-msg', `预约成功：${fmtBookingRange(slot.start_at, slot.end_at)}。如需改约，先点击「我的」色块取消。`, false);
+  } else {
+    bookingData = prev; // 回滚乐观更新
+    renderBooking();
+    showMsg('booking-msg', errText, true);
+  }
+  bookingBusy = false;
   loadApplication();
 }
 
 async function cancelBooking() {
-  if (!confirm('确定取消当前面试预约？取消后可重新选择时段。')) return;
+  if (bookingBusy || !bookingData || !bookingData.my_booking) return;
+  if (!confirm('确定取消当前面试预约？取消后该时段释放，可重新选择。')) return;
+  bookingBusy = true;
+  const prev = bookingData;
+  const bkId = bookingData.my_booking.id;
+  // 乐观更新：先按取消成功渲染（色块恢复可约），失败回滚
+  bookingData = {
+    ...bookingData,
+    my_booking: null,
+    slots: (bookingData.slots || []).map(s => s.id === bkId ? { ...s, taken: false } : s)
+  };
+  renderBooking();
   let ok = false, errText = '取消失败，请稍后重试';
   try {
     const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/interview-slots/mine/cancel`, {
@@ -765,12 +956,26 @@ async function cancelBooking() {
       if (typeof err.detail === 'string' && err.detail) errText = err.detail;
     }
   } catch (e) {
-    errText = '无法连接服务器，请检查网络后重试';
+    errText = '无法连接服务器，取消未成功';
   }
-  await loadBooking();
-  showMsg('booking-msg', ok ? '已取消预约，可重新选择时段。' : errText, !ok);
+  if (ok) {
+    await loadBooking();
+    showMsg('booking-msg', '已取消预约，可重新选择时段。', false);
+  } else {
+    bookingData = prev; // 回滚乐观更新
+    renderBooking();
+    showMsg('booking-msg', errText, true);
+  }
+  bookingBusy = false;
   loadApplication();
 }
+
+// 切回标签页时立即同步一次占用（平时每 30 秒轮询）
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !bookingTimer || bookingBusy || pendingBooking) return;
+  if (document.getElementById('booking-card').classList.contains('hidden')) return;
+  refreshBookingData();
+});
 
 async function logout() {
   try {
