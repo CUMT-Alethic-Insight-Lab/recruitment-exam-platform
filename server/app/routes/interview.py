@@ -84,13 +84,14 @@ def _latest_live_session(conn: sqlite3.Connection, cid: str, sid: str) -> sqlite
 def _booking_for(conn: sqlite3.Connection, cid: str, sid: str) -> dict | None:
     """本人面试时段预约（过期的也带上，面试当天要看）。"""
     row = conn.execute(
-        "SELECT start_at, end_at, note FROM interview_slot"
+        "SELECT start_at, end_at, note, method FROM interview_slot"
         " WHERE campaign_id = ? AND booked_by = ?",
         (cid, sid),
     ).fetchone()
     if row is None:
         return None
-    return {"start_at": row["start_at"], "end_at": row["end_at"], "note": row["note"]}
+    return {"start_at": row["start_at"], "end_at": row["end_at"],
+            "note": row["note"], "method": row["method"]}
 
 
 def _k3_for_session(conn: sqlite3.Connection, session_id: str | None) -> dict | None:

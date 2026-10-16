@@ -61,13 +61,6 @@
 }
 .bk-mine-box .k { color: var(--muted); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; flex-shrink: 0; }
 .bk-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; }
-.bk-mode { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 2px; overflow: hidden; }
-.bk-mode button {
-  border: none; background: transparent; padding: 4px 12px; cursor: pointer;
-  font-size: 13px; font-family: var(--font-body); color: var(--muted);
-}
-.bk-mode button + button { border-left: 1px solid var(--line-strong); }
-.bk-mode button.active { background: var(--primary); color: var(--paper); }
 .bk-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--muted); margin-left: auto; }
 .bk-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid transparent; }
 .bk-legend .lg-free i { background: var(--check-bg); border-color: var(--line-strong); }
@@ -110,6 +103,31 @@ button.bk-slot:focus-visible { outline-offset: -2px; }
 .bk-slot.pending { opacity: 0.65; cursor: progress; }
 .bk-slot .bk-tag { font-size: 10px; letter-spacing: 0.1em; font-family: var(--font-body); font-weight: 400; }
 .bk-stamp { font-size: 12px; color: var(--muted); font-family: var(--font-mono); margin-left: auto; }
+/* 预约确认浮层：点空块后先显式选择面试形式（线上/线下）才放行提交 */
+.bk-confirm-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.bk-confirm {
+  background: var(--paper); border: 1px solid var(--line-strong); border-radius: 3px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.25);
+  width: min(420px, 100%); padding: 16px 18px;
+}
+.bk-confirm h3 { margin: 0 0 6px; font-size: 16px; }
+.bk-confirm-range { margin: 0 0 10px; font-family: var(--font-mono); font-size: 14px; }
+.bk-confirm-ask { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.bk-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 420px) { .bk-opts { grid-template-columns: 1fr; } }
+.bk-opt {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  border: 1.5px solid var(--line-strong); border-radius: 3px; background: var(--panel);
+  padding: 10px 12px; cursor: pointer; text-align: left; font-family: var(--font-body);
+}
+.bk-opt strong { font-size: 14px; }
+.bk-opt span { font-size: 12px; color: var(--muted); }
+.bk-opt.active { border-color: var(--primary); background: var(--check-bg); box-shadow: inset 0 0 0 1px var(--primary); }
+.bk-confirm-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
 /* 手机上顶栏品牌+右侧按钮组会挤出几像素横向滚动（共享 topbar 既有小问题），此页兜底换行 */
 @media (max-width: 480px) {
   .topbar-inner { grid-template-columns: 1fr auto; }
@@ -198,7 +216,26 @@ __TOPBAR__
     <div id="booking-body"></div>
     <p class="msg hidden" id="booking-msg"></p>
     <p class="hint" style="margin-top:10px">面试支持线上 / 线下，线下地点：计科楼 A302（人工智能实验室）。</p>
-    <p class="hint" style="margin-top:10px">点击空余色块即完成预约；点击「我的」色块可取消改约。占用状态每 30 秒自动刷新（也可手动刷新）；时段如有特殊情况请联系管理员（QQ 招新群）。</p>
+    <p class="hint" style="margin-top:10px">点击空余色块，选择面试形式（线上 / 线下，必选）后确认预约；点击「我的」色块可取消改约。占用状态每 30 秒自动刷新（也可手动刷新）；时段如有特殊情况请联系管理员（QQ 招新群）。</p>
+    <div id="bk-confirm" class="bk-confirm-overlay hidden">
+      <div class="bk-confirm" role="dialog" aria-modal="true" aria-labelledby="bk-confirm-title">
+        <h3 id="bk-confirm-title">确认预约</h3>
+        <p class="bk-confirm-range" id="bk-confirm-range"></p>
+        <p class="bk-confirm-ask">请选择面试形式（必选，不选无法提交）：</p>
+        <div class="bk-opts">
+          <button type="button" class="bk-opt" id="bk-opt-offline" data-method="offline">
+            <strong>线下面试</strong><span>计科楼 A302（人工智能实验室）</span>
+          </button>
+          <button type="button" class="bk-opt" id="bk-opt-online" data-method="online">
+            <strong>线上会议</strong><span>会议链接见时段备注或 QQ 群</span>
+          </button>
+        </div>
+        <div class="bk-confirm-actions">
+          <button type="button" class="btn small" id="bk-confirm-submit" disabled>确认预约</button>
+          <button type="button" class="btn small secondary" id="bk-confirm-cancel">取消</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="card" id="guide-card">
@@ -682,7 +719,8 @@ const MODE_SHORT = { online: '线上', offline: '线下' };
 const BOOKING_POLL_MS = 30000;
 
 let bookingData = null;      // available 端点最近一次返回
-let bookingMode = 'offline'; // 点击空块时要预约的面试形式
+let confirmSlot = null;      // 确认浮层打开中的时段（待选择面试形式）
+let confirmMethod = null;    // 浮层内显式选中的面试形式（null = 未选，不可提交）
 let bookingBusy = false;     // 预约/取消请求在途（抑制连点与轮询）
 let pendingBooking = false;  // 乐观更新在途（色块显示进行中样式）
 let bookingTimer = null;
@@ -733,7 +771,7 @@ async function loadBooking() {
 function startBookingPolling() {
   stopBookingPolling();
   bookingTimer = setInterval(() => {
-    if (bookingBusy || pendingBooking || document.hidden || forcedPwMode) return;
+    if (bookingBusy || pendingBooking || confirmSlot || document.hidden || forcedPwMode) return;
     if (document.getElementById('booking-card').classList.contains('hidden')) return;
     refreshBookingData();
   }, BOOKING_POLL_MS);
@@ -748,6 +786,11 @@ async function refreshBookingData() {
   if (!data) return; // 轮询失败静默保留旧数据，等下一轮
   bookingData = data;
   bookingStamp = new Date().toTimeString().slice(0, 8);
+  // 确认浮层开着时若目标槽已被别人约走，收起浮层避免拿着过期状态提交
+  if (confirmSlot) {
+    const cur = (data.slots || []).find(s => String(s.id) === String(confirmSlot.id));
+    if (!cur || slotState(cur) !== 'free') closeBookingConfirm();
+  }
   renderBooking();
 }
 
@@ -777,10 +820,10 @@ function renderBooking() {
       <span class="k">我的预约</span>
       ${bk
         ? `<strong>${fmtBookingRange(bk.start_at, bk.end_at)}</strong>
-           <span>${esc(fmtBookingMode(bk.booked_mode).replace(' · ', ''))}</span>
+           <span>${esc(fmtBookingMode(bk.method).replace(' · ', ''))}</span>
            ${bk.note ? `<span class="hint" style="margin:0">备注：${esc(bk.note)}</span>` : ''}
            <button class="btn small secondary" id="bk-cancel-btn">取消预约</button>`
-        : '<span>暂未预约——点击下方空余色块即完成预约。</span>'}
+        : '<span>暂未预约——点击下方空余色块，选择面试形式后确认。</span>'}
       <button class="btn small secondary" id="bk-refresh-btn">刷新</button>
       <span class="bk-stamp">更新于 ${bookingStamp}</span>
     </div>`;
@@ -810,11 +853,7 @@ function renderBooking() {
 
   let html = `${mineBox}
     <div class="bk-head">
-      <span style="font-size:12.5px;color:var(--muted)">面试形式</span>
-      <span class="bk-mode" id="bk-mode">
-        <button type="button" data-mode="offline" class="${bookingMode === 'offline' ? 'active' : ''}">线下</button>
-        <button type="button" data-mode="online" class="${bookingMode === 'online' ? 'active' : ''}">线上</button>
-      </span>
+      <span style="font-size:12.5px;color:var(--muted)">点击空块选择面试形式（线上 / 线下）</span>
       <span class="bk-legend">
         <span class="lg-free"><i></i>可预约</span>
         <span class="lg-taken"><i></i>已被约</span>
@@ -840,9 +879,9 @@ function renderBooking() {
                 return `<td class="bk-cell"><button type="button" class="bk-slot taken" disabled title="${esc(tip)}（已被预约）">已约</button></td>`;
               }
               if (st === 'mine') {
-                return `<td class="bk-cell"><button type="button" class="bk-slot mine${pendingBooking ? ' pending' : ''}" data-slot-id="${esc(String(s.id))}" title="${esc(tip)}（点击取消预约）"><span class="bk-tag">我的</span>${esc(MODE_SHORT[bookingData.my_booking.booked_mode] || '')}</button></td>`;
+                return `<td class="bk-cell"><button type="button" class="bk-slot mine${pendingBooking ? ' pending' : ''}" data-slot-id="${esc(String(s.id))}" title="${esc(tip)}（点击取消预约）"><span class="bk-tag">我的</span>${esc(MODE_SHORT[bookingData.my_booking.method] || '')}</button></td>`;
               }
-              return `<td class="bk-cell"><button type="button" class="bk-slot free" data-slot-id="${esc(String(s.id))}" title="${esc(tip)}（点击预约${MODE_SHORT[bookingMode] || ''}）">+</button></td>`;
+              return `<td class="bk-cell"><button type="button" class="bk-slot free" data-slot-id="${esc(String(s.id))}" title="${esc(tip)}（点击预约）">+</button></td>`;
             }).join('')}
           </tr>`).join('')}
         </tbody>
@@ -858,14 +897,6 @@ function bindBookingActions() {
   if (cancelBtn) cancelBtn.addEventListener('click', cancelBooking);
   const refreshBtn = document.getElementById('bk-refresh-btn');
   if (refreshBtn) refreshBtn.addEventListener('click', manualRefreshBooking);
-  const modeBox = document.getElementById('bk-mode');
-  if (modeBox) {
-    modeBox.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-      if (bookingMode === b.dataset.mode) return;
-      bookingMode = b.dataset.mode;
-      renderBooking();
-    }));
-  }
   document.querySelectorAll('#booking-body button.bk-slot[data-slot-id]').forEach(btn => {
     btn.addEventListener('click', () => {
       const s = (bookingData.slots || []).find(x => String(x.id) === String(btn.dataset.slotId));
@@ -874,20 +905,62 @@ function bindBookingActions() {
   });
 }
 
-async function onSlotClick(slot) {
+function onSlotClick(slot) {
   if (bookingBusy) return;
   const st = slotState(slot);
   if (st === 'taken') return; // 灰块禁点
   if (st === 'mine') { cancelBooking(); return; }
-  // 点块即预约：先乐观把块标成「我的」，失败回滚并提示
+  openBookingConfirm(slot);
+}
+
+// ── 预约确认浮层：必须显式选择面试形式（线上/线下）才放行提交 ──
+
+function openBookingConfirm(slot) {
+  confirmSlot = slot;
+  confirmMethod = null; // 不给默认值，强制二选一
+  renderBookingConfirm();
+}
+
+function closeBookingConfirm() {
+  confirmSlot = null;
+  confirmMethod = null;
+  document.getElementById('bk-confirm').classList.add('hidden');
+}
+
+function renderBookingConfirm() {
+  const overlay = document.getElementById('bk-confirm');
+  overlay.classList.remove('hidden');
+  document.getElementById('bk-confirm-range').textContent =
+    `${fmtBookingRange(confirmSlot.start_at, confirmSlot.end_at)}`;
+  const submit = document.getElementById('bk-confirm-submit');
+  submit.disabled = true; // 未选择前禁止提交
+  overlay.querySelectorAll('.bk-opt').forEach(b => {
+    b.classList.toggle('active', false);
+    b.onclick = () => {
+      confirmMethod = b.dataset.method;
+      overlay.querySelectorAll('.bk-opt').forEach(x => x.classList.toggle('active', x === b));
+      submit.disabled = false;
+    };
+  });
+  submit.onclick = submitBooking;
+  document.getElementById('bk-confirm-cancel').onclick = closeBookingConfirm;
+}
+
+async function submitBooking() {
+  // 双保险：浮层未显式选中形式时直接拒绝（按钮本身也已 disabled）
+  if (bookingBusy || !confirmSlot || !confirmMethod) return;
+  const slot = confirmSlot;
+  const method = confirmMethod;
   bookingBusy = true;
   pendingBooking = true;
+  closeBookingConfirm();
+  // 乐观更新：先按选中形式把块标成「我的」，失败回滚并提示
   const prev = bookingData;
   bookingData = {
     ...bookingData,
     my_booking: {
       id: slot.id, start_at: slot.start_at, end_at: slot.end_at,
-      note: slot.note, booked_at: null, booked_mode: bookingMode
+      note: slot.note, booked_at: null, method
     }
   };
   renderBooking();
@@ -896,7 +969,7 @@ async function onSlotClick(slot) {
     const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/interview-slots/${encodeURIComponent(slot.id)}/book`, {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: bookingMode })
+      body: JSON.stringify({ method })
     });
     if (res.status === 401) {
       localStorage.removeItem(STUDENT_TOKEN_KEY);
@@ -915,7 +988,7 @@ async function onSlotClick(slot) {
   pendingBooking = false;
   if (ok) {
     await loadBooking();
-    showMsg('booking-msg', `预约成功：${fmtBookingRange(slot.start_at, slot.end_at)}。如需改约，先点击「我的」色块取消。`, false);
+    showMsg('booking-msg', `预约成功：${fmtBookingRange(slot.start_at, slot.end_at)}（${MODE_SHORT[method]}）。如需改约，先点击「我的」色块取消。`, false);
   } else {
     bookingData = prev; // 回滚乐观更新
     renderBooking();
@@ -924,6 +997,14 @@ async function onSlotClick(slot) {
   bookingBusy = false;
   loadApplication();
 }
+
+// Esc / 点遮罩关闭确认浮层（已选中的选择一并丢弃，下次重新选）
+document.getElementById('bk-confirm').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeBookingConfirm();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && confirmSlot) closeBookingConfirm();
+});
 
 async function cancelBooking() {
   if (bookingBusy || !bookingData || !bookingData.my_booking) return;
@@ -972,7 +1053,7 @@ async function cancelBooking() {
 
 // 切回标签页时立即同步一次占用（平时每 30 秒轮询）
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden || !bookingTimer || bookingBusy || pendingBooking) return;
+  if (document.hidden || !bookingTimer || bookingBusy || pendingBooking || confirmSlot) return;
   if (document.getElementById('booking-card').classList.contains('hidden')) return;
   refreshBookingData();
 });

@@ -270,7 +270,7 @@ class AdminSlotOut(BaseModel):
     note: str
     booked_by: str | None = None
     booked_at: str | None = None
-    booked_mode: str | None = None
+    method: str | None = None
     student_name: str | None = None
     created_at: str
 
@@ -281,12 +281,12 @@ class CandidateSlotOut(BaseModel):
     end_at: str
     note: str
     booked_at: str | None = None
-    booked_mode: str | None = None
+    method: str | None = None
 
 
 class SlotBookIn(BaseModel):
     # 契约要求缺失/非法走 400 中文文案而非 pydantic 422，故此处宽松、路由内校验
-    mode: str | None = None
+    method: str | None = None
 
 
 class CommentIn(BaseModel):

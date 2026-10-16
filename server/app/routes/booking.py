@@ -159,7 +159,7 @@ def unbook_slot(cid: str, slot_id: str):
             raise HTTPException(status_code=404, detail="面试时段不存在")
         conn.execute(
             "UPDATE interview_slot"
-            " SET booked_by = NULL, booked_at = NULL, booked_mode = NULL WHERE id = ?",
+            " SET booked_by = NULL, booked_at = NULL, method = NULL WHERE id = ?",
             (slot_id,),
         )
         return AdminSlotOut(**dict(_admin_slot(conn, cid, slot_id)))
@@ -185,6 +185,7 @@ def available_slots(cid: str, request: Request):
                 "start_at": r["start_at"],
                 "end_at": r["end_at"],
                 "note": r["note"],
+                "method": r["method"],
                 "taken": r["booked_by"] is not None,
             }
             for r in rows
@@ -200,7 +201,7 @@ def available_slots(cid: str, request: Request):
 @router.post("/{cid}/interview-slots/{slot_id}/book", response_model=CandidateSlotOut)
 def book_slot(cid: str, slot_id: str, request: Request, body: SlotBookIn):
     student_id = require_applicant(request, cid)
-    if body.mode not in ("online", "offline"):
+    if body.method not in ("online", "offline"):
         raise HTTPException(status_code=400, detail="请选择线上或线下面试")
     with db.connection() as conn:
         get_campaign_or_404(conn, cid)
@@ -221,9 +222,9 @@ def book_slot(cid: str, slot_id: str, request: Request, body: SlotBookIn):
         now = now_iso()
         try:
             cur = conn.execute(
-                "UPDATE interview_slot SET booked_by = ?, booked_at = ?, booked_mode = ?"
+                "UPDATE interview_slot SET booked_by = ?, booked_at = ?, method = ?"
                 " WHERE id = ? AND booked_by IS NULL",
-                (student_id, now, body.mode, slot_id),
+                (student_id, now, body.method, slot_id),
             )
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail="你已有预约，请先取消再改约")
@@ -247,7 +248,7 @@ def cancel_my_slot(cid: str, request: Request):
                 status_code=400, detail="时段已开始，无法取消，如需改约请联系管理员")
         conn.execute(
             "UPDATE interview_slot"
-            " SET booked_by = NULL, booked_at = NULL, booked_mode = NULL WHERE id = ?",
+            " SET booked_by = NULL, booked_at = NULL, method = NULL WHERE id = ?",
             (mine["id"],),
         )
         return {"ok": True}
