@@ -6,6 +6,13 @@
 <title>Alethic Insight 管理端</title>
 <link rel="stylesheet" href="__PREFIX__/static/css/style.css">
 <style>
+/* 管理端内容区加宽：报名列表等宽表格尽量摊开；小屏按视口回退，不产生横向溢出 */
+.container.wide { max-width: min(1560px, 96vw); }
+/* 手机上顶栏品牌+右侧按钮组会挤出几像素横向滚动（共享 topbar 既有小问题），此页兜底换行 */
+@media (max-width: 480px) {
+  .topbar-inner { grid-template-columns: 1fr auto; }
+  .topbar-right { grid-column: 1 / -1; justify-self: end; }
+}
 .tabs { display: flex; gap: 6px; margin: 18px 0; border-bottom: 1px solid var(--border); }
 .tab-btn {
   padding: 9px 14px; border: none; background: none; cursor: pointer;
@@ -1600,8 +1607,8 @@ async function refreshInterviewSlots() {
               : '<span style="color:var(--muted)">空闲</span>'}</td>
             <td>${esc(s.note || '')}</td>
             <td>${booked
-              ? `<button class="btn small secondary" onclick="unbookSlot(${s.id})">取消预约</button>`
-              : `<button class="btn small danger" onclick="deleteSlot(${s.id})">删除</button>`}</td>
+              ? `<button class="btn small secondary" onclick="unbookSlot('${esc(s.id)}')">取消预约</button>`
+              : `<button class="btn small danger" onclick="deleteSlot('${esc(s.id)}')">删除</button>`}</td>
           </tr>`;
         }).join('')}
       </tbody>

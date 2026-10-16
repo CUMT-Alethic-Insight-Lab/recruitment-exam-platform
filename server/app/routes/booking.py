@@ -93,15 +93,20 @@ def generate_slots(cid: str, body: SlotGenerateIn):
                 if start_at in existing:
                     skipped += 1
                 else:
-                    conn.execute(
-                        "INSERT INTO interview_slot"
-                        " (id, campaign_id, start_at, end_at, note, created_at)"
-                        " VALUES (?, ?, ?, ?, ?, ?)",
-                        (uuid.uuid4().hex[:16], cid, start_at,
-                         (cur + step).isoformat(), body.note, now),
-                    )
-                    existing.add(start_at)
-                    created += 1
+                    try:
+                        conn.execute(
+                            "INSERT INTO interview_slot"
+                            " (id, campaign_id, start_at, end_at, note, created_at)"
+                            " VALUES (?, ?, ?, ?, ?, ?)",
+                            (uuid.uuid4().hex[:16], cid, start_at,
+                             (cur + step).isoformat(), body.note, now),
+                        )
+                    except sqlite3.IntegrityError:
+                        # 唯一索引 (campaign_id, start_at) 兜底：并发生成时撞线视为跳过
+                        skipped += 1
+                    else:
+                        existing.add(start_at)
+                        created += 1
                 cur += step
         rows = conn.execute(
             "SELECT s.*, a.name AS student_name FROM interview_slot s"
@@ -208,6 +213,9 @@ def book_slot(cid: str, slot_id: str, request: Request, body: SlotBookIn):
         ).fetchone()
         if slot is None:
             raise HTTPException(status_code=404, detail="面试时段不存在")
+        if slot["booked_by"] == student_id:
+            # 幂等重放：重复预约自己已持有的同一格（双击/重试）不算改约冲突
+            return CandidateSlotOut(**dict(slot))
         if _parse_at(slot["start_at"]) <= _utcnow():
             raise HTTPException(status_code=400, detail="该时段已开始，无法预约")
         now = now_iso()
