@@ -23,6 +23,9 @@ from .campaigns import ensure_apply_open, get_campaign_or_404, now_iso
 
 router = APIRouter(prefix="/api/campaigns", tags=["applications"])
 
+# 学号已存在账号/已完成注册时的统一冲突文案（M26：注册冲突覆盖漏洞）
+CONFLICT_REGISTERED = "该学号已注册，请直接登录或联系管理员重置密码"
+
 
 def resolve_application(conn: sqlite3.Connection, cid: str, student_id: str) -> sqlite3.Row | None:
     return conn.execute(
@@ -63,7 +66,7 @@ def _row_to_out(row: sqlite3.Row) -> ApplicationOut:
 
 
 @router.post("/{cid}/applications", response_model=ApplicationOut)
-def submit_application(cid: str, body: ApplicationCreate):
+def submit_application(cid: str, body: ApplicationCreate, request: Request):
     if len(body.domains) > MAX_DOMAINS:
         raise HTTPException(status_code=400, detail=f"领域最多选择 {MAX_DOMAINS} 个")
     captcha.verify_or_http(body.captcha_id, body.captcha_text)
@@ -93,6 +96,19 @@ def submit_application(cid: str, body: ApplicationCreate):
                     detail={"message": "该学号已有报名记录", "student_id": body.student_id,
                             "existing_name": existing["name"]},
                 )
+            if existing["registration_complete"]:
+                # 已完成注册的报名不允许匿名/他人覆盖（M26）：问卷提交端点本身匿名可达，
+                # 必须校验持有人会话，防止凭学号直接改写他人（含管理员）档案
+                sess = auth.lookup_session(conn, auth.bearer_token(request))
+                if sess is None or sess["kind"] != "applicant" \
+                        or sess["campaign_id"] != cid:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="该学号已完成注册，请先登录本人账号后再修改报名信息",
+                    )
+                if sess["student_id"] != body.student_id:
+                    raise HTTPException(
+                        status_code=403, detail="只能修改本人的报名信息")
             params["created_at"] = existing["created_at"]
             conn.execute(
                 "UPDATE application SET name=:name, gender=:gender, class_name=:class_name,"
@@ -103,6 +119,10 @@ def submit_application(cid: str, body: ApplicationCreate):
                 params,
             )
         else:
+            if conn.execute("SELECT 1 FROM account WHERE student_id = ?",
+                            (body.student_id,)).fetchone() is not None:
+                # 已有账号（管理员/往届批次考生）不得再经报名端点建档案（M26 顶号漏洞）
+                raise HTTPException(status_code=409, detail=CONFLICT_REGISTERED)
             params["created_at"] = now
             salt = auth.new_salt()
             client_hash = auth.compute_client_hash(body.student_id, salt)
@@ -132,10 +152,13 @@ def register(cid: str, body: RegistrationCreate):
         existing = resolve_application(conn, cid, body.student_id)
         now = now_iso()
         if existing is not None and existing["registration_complete"]:
-            raise HTTPException(
-                status_code=409,
-                detail="该学号已完成注册，请直接登录",
-            )
+            raise HTTPException(status_code=409, detail=CONFLICT_REGISTERED)
+        if existing is None and conn.execute(
+                "SELECT 1 FROM account WHERE student_id = ?",
+                (body.student_id,)).fetchone() is not None:
+            # 学号已建账号（管理员/往届批次考生）但本批次无报名行：
+            # 拒绝匿名重复注册，防止凭他人学号顶建档案（M26 顶号漏洞）
+            raise HTTPException(status_code=409, detail=CONFLICT_REGISTERED)
         if existing is None:
             salt = auth.new_salt()
             client_hash = auth.compute_client_hash(body.student_id, salt)

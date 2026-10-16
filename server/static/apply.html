@@ -393,13 +393,21 @@ async function submitComplete() {
     ...captchaPayload(2)
   };
   try {
+    const token = localStorage.getItem(STUDENT_TOKEN_KEY);
     const res = await fetch(`__PREFIX__/api/campaigns/${cid}/applications`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': 'Bearer ' + token } : {})
+      },
       body: JSON.stringify(payload)
     });
     if (res.status === 409) {
       showError('step2-error', '该学号已有报名记录且当前未登录，请刷新页面重新从第一步进入或去登录。');
+      return;
+    }
+    if (res.status === 401 || res.status === 403) {
+      showError('step2-error', '该学号已完成注册，请刷新页面用本人账号登录后再提交。');
       return;
     }
     if (!res.ok) {

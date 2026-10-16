@@ -1,6 +1,6 @@
 """M9 流程式注册：第一步注册接口 + registration_complete 门槛。"""
 
-from conftest import applicant_login
+from conftest import applicant_headers, applicant_login
 
 
 def _register(client, cid, student_id, name="注册甲", gender="male"):
@@ -77,7 +77,7 @@ def test_register_completed_conflict_409(client, cid):
     assert res.status_code == 200, res.text
     res = _register(client, cid, student)
     assert res.status_code == 409
-    assert res.json()["detail"] == "该学号已完成注册，请直接登录"
+    assert res.json()["detail"] == "该学号已注册，请直接登录或联系管理员重置密码"
 
 
 def test_full_submit_sets_registration_complete(client, cid):
@@ -90,10 +90,12 @@ def test_full_submit_sets_registration_complete(client, cid):
     )
     assert res.status_code == 200, res.text
     assert res.json()["registration_complete"] == 1
-    # 再次覆盖提交，仍为 1
+    # 再次覆盖提交（已完成注册，须本人登录态，M26），仍为 1
+    own = applicant_headers(client, cid, student)
     res = client.post(
         f"/api/campaigns/{cid}/applications",
         json={**_app_payload(student, "问卷乙"), "overwrite": True},
+        headers=own,
     )
     assert res.status_code == 200, res.text
     assert res.json()["registration_complete"] == 1

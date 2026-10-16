@@ -62,10 +62,13 @@ def test_exam_mode_stored_and_echoed(client, cid, admin_headers):
                       json=_app_payload("08263201", "非法方式", exam_mode="whatever"))
     assert res.status_code == 422
 
-    # overwrite 重新提交可更新 exam_mode（08263001 最初为 standard）
+    # overwrite 重新提交可更新 exam_mode（08263001 最初为 standard）；
+    # 已完成注册的覆盖须本人登录态（M26）
+    own = applicant_headers(client, cid, "08263001")
     res = client.post(f"/api/campaigns/{cid}/applications",
                       json=_app_payload("08263001", "默认标准",
-                                        exam_mode="free_creation", overwrite=True))
+                                        exam_mode="free_creation", overwrite=True),
+                      headers=own)
     assert res.status_code == 200, res.text
     assert res.json()["exam_mode"] == "free_creation"
 

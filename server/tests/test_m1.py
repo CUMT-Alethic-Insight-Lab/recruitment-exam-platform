@@ -1,6 +1,8 @@
 import csv
 import io
 
+from conftest import applicant_login
+
 
 def test_apply_page_served(client, cid):
     res = client.get(f"/apply/{cid}")
@@ -47,8 +49,21 @@ def test_duplicate_409_then_overwrite(client, cid):
     assert res2.status_code == 409
     assert res2.json()["detail"]["existing_name"] == "李四"
 
+    # 已完成注册的报名：匿名/他人覆盖一律拒绝（M26），仅本人登录态可改
     payload["name"] = "李四（改）"
-    res3 = client.post(f"/api/campaigns/{cid}/applications", json={**payload, "overwrite": True})
+    res_anon = client.post(f"/api/campaigns/{cid}/applications",
+                           json={**payload, "overwrite": True})
+    assert res_anon.status_code == 401
+
+    login = applicant_login(client, cid, "08260001")
+    own = {"Authorization": f"Bearer {login['token']}"}
+    other = {"Authorization": f"Bearer {applicant_login(client, cid, '08261234')['token']}"}
+    res_other = client.post(f"/api/campaigns/{cid}/applications",
+                            json={**payload, "overwrite": True}, headers=other)
+    assert res_other.status_code == 403
+
+    res3 = client.post(f"/api/campaigns/{cid}/applications",
+                       json={**payload, "overwrite": True}, headers=own)
     assert res3.status_code == 200
     assert res3.json()["name"] == "李四（改）"
 
