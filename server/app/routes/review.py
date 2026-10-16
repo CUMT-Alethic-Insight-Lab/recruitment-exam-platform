@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from .. import db
 from ..auth import require_admin
-from ..schemas import ReviewSessionOut, ScoreIn, ScoreOut
+from ..schemas import CommentIn, ReviewSessionOut, ScoreIn, ScoreOut
 from .campaigns import get_campaign_or_404, now_iso
 
 router = APIRouter(prefix="/api/campaigns", tags=["review"], dependencies=[Depends(require_admin)])
@@ -156,3 +156,34 @@ def submit_score(cid: str, sid: str, body: ScoreIn):
         )
         row = conn.execute("SELECT * FROM exam_score WHERE session_id = ?", (sid,)).fetchone()
         return ScoreOut(**dict(row))
+
+
+@router.patch("/{cid}/sessions/{sid}/comment")
+def patch_comment(cid: str, sid: str, body: CommentIn):
+    """评语随时可改：无评分行则建行（分数留 NULL），有行只改 comment。"""
+    with db.connection() as conn:
+        get_campaign_or_404(conn, cid)
+        _get_session(conn, cid, sid)
+        now = now_iso()
+        existing = conn.execute(
+            "SELECT 1 FROM exam_score WHERE session_id = ?", (sid,)
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                "INSERT INTO exam_score"
+                " (session_id, increment_score, human_rate, comment, scorer,"
+                "  created_at, updated_at)"
+                " VALUES (?, NULL, NULL, ?, '', ?, ?)",
+                (sid, body.comment, now, now),
+            )
+        else:
+            conn.execute(
+                "UPDATE exam_score SET comment = ?, updated_at = ? WHERE session_id = ?",
+                (body.comment, now, sid),
+            )
+        row = conn.execute(
+            "SELECT comment, updated_at FROM exam_score WHERE session_id = ?",
+            (sid,),
+        ).fetchone()
+        return {"session_id": sid, "comment": row["comment"],
+                "updated_at": row["updated_at"]}

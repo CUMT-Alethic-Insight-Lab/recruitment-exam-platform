@@ -157,6 +157,22 @@ CREATE TABLE IF NOT EXISTS captcha (
     used        INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS interview_slot (
+    id          TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL,
+    start_at    TEXT NOT NULL,
+    end_at      TEXT NOT NULL,
+    note        TEXT NOT NULL DEFAULT '',
+    booked_by   TEXT,
+    booked_at   TEXT,
+    booked_mode TEXT,
+    created_at  TEXT NOT NULL,
+    UNIQUE (campaign_id, booked_by)
+);
+
+CREATE INDEX IF NOT EXISTS idx_interview_slot_campaign_start
+    ON interview_slot (campaign_id, start_at);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     actor       TEXT NOT NULL,
@@ -232,6 +248,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE application ADD COLUMN registration_complete INTEGER NOT NULL DEFAULT 1"
         )
+    slot_cols = {r["name"] for r in conn.execute("PRAGMA table_info(interview_slot)")}
+    if "booked_mode" not in slot_cols:
+        conn.execute("ALTER TABLE interview_slot ADD COLUMN booked_mode TEXT")
     _migrate_account(conn)
 
 

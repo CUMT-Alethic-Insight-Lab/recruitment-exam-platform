@@ -249,6 +249,52 @@ class ReviewSessionOut(BaseModel):
     slots: dict = Field(default_factory=dict)
 
 
+class SlotWindowIn(BaseModel):
+    start: str
+    end: str
+
+
+class SlotGenerateIn(BaseModel):
+    date: str
+    windows: list[SlotWindowIn] = Field(default_factory=list)
+    slot_minutes: int
+    note: str = ""
+
+    model_config = {"str_strip_whitespace": True}
+
+
+class AdminSlotOut(BaseModel):
+    id: str
+    start_at: str
+    end_at: str
+    note: str
+    booked_by: str | None = None
+    booked_at: str | None = None
+    booked_mode: str | None = None
+    student_name: str | None = None
+    created_at: str
+
+
+class CandidateSlotOut(BaseModel):
+    id: str
+    start_at: str
+    end_at: str
+    note: str
+    booked_at: str | None = None
+    booked_mode: str | None = None
+
+
+class SlotBookIn(BaseModel):
+    # 契约要求缺失/非法走 400 中文文案而非 pydantic 422，故此处宽松、路由内校验
+    mode: str | None = None
+
+
+class CommentIn(BaseModel):
+    comment: str = ""
+
+    model_config = {"str_strip_whitespace": True}
+
+
 class InterviewUpsert(BaseModel):
     m1: float = Field(ge=1, le=5, multiple_of=0.5)
     m2: float = Field(ge=1, le=5, multiple_of=0.5)

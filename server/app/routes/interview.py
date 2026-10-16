@@ -81,6 +81,18 @@ def _latest_live_session(conn: sqlite3.Connection, cid: str, sid: str) -> sqlite
     ).fetchone()
 
 
+def _booking_for(conn: sqlite3.Connection, cid: str, sid: str) -> dict | None:
+    """本人面试时段预约（过期的也带上，面试当天要看）。"""
+    row = conn.execute(
+        "SELECT start_at, end_at, note FROM interview_slot"
+        " WHERE campaign_id = ? AND booked_by = ?",
+        (cid, sid),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"start_at": row["start_at"], "end_at": row["end_at"], "note": row["note"]}
+
+
 def _k3_for_session(conn: sqlite3.Connection, session_id: str | None) -> dict | None:
     if session_id is None:
         return None
@@ -114,6 +126,7 @@ def _candidate_common(conn: sqlite3.Connection, cid: str, sid: str,
         "domains": json.loads(app["domains"]),
         "track": track,
         "k3": k3,
+        "booking": _booking_for(conn, cid, sid),
     }
     if with_interview:
         iv = _get_interview(conn, cid, sid)
@@ -252,6 +265,7 @@ def interview_brief(cid: str, sid: str):
         ]
         return {
             **common,
+            "session_id": session["id"] if session is not None else None,
             "questions": questions,
             "safety_picks": safety_picks,
             "suggested_safety_pick": "S1" if "agent" in domain_tags else "S3",

@@ -292,6 +292,22 @@ __TOPBAR__
     </div>
 
     <div id="tab-interview" class="hidden">
+      <div class="card" style="margin-bottom:14px">
+        <h3 style="font-size:15px;margin:0 0 8px">面试时段管理</h3>
+        <div class="toolbar" style="margin-top:0">
+          <input type="date" id="slot-date">
+          <input type="text" id="slot-windows" placeholder="如 10:00-15:00,16:00-22:00" style="width:210px">
+          <select id="slot-minutes">
+            <option value="30">30 分钟</option>
+            <option value="45" selected>45 分钟</option>
+            <option value="60">60 分钟</option>
+          </select>
+          <input type="text" id="slot-note" placeholder="备注（可选，如：腾讯会议 xxx）" style="width:190px">
+          <button class="btn small" id="slot-generate-btn">生成时段</button>
+          <span class="msg" id="slot-gen-msg" style="color:var(--muted);font-size:12px"></span>
+        </div>
+        <div id="slot-list" style="max-height:40vh;overflow:auto"></div>
+      </div>
       <div class="toolbar">
         <button class="btn small secondary" id="refresh-interview-btn">刷新</button>
         <span class="msg" id="interview-count" style="color:var(--muted)"></span>
@@ -301,7 +317,7 @@ __TOPBAR__
         <table>
           <thead>
             <tr>
-              <th>姓名</th><th>学号</th><th>状态</th><th>K3 增量分</th><th>K3 人类率</th>
+              <th>姓名</th><th>学号</th><th>状态</th><th>预约时段</th><th>K3 增量分</th><th>K3 人类率</th>
               <th>面试等级</th><th>面试总分</th>
             </tr>
           </thead>
@@ -318,6 +334,16 @@ __TOPBAR__
 
         <h3 style="font-size:15px;margin:10px 0 6px">备课卡</h3>
         <div id="interview-brief" class="iv-brief"></div>
+
+        <div id="interview-comment-card" style="margin-top:10px;border:1px solid var(--border);border-radius:2px;padding:8px 12px;background:var(--card)">
+          <div class="iv-meta"><strong>预约时段：</strong><span id="iv-booking-label" style="color:var(--muted)">—</span></div>
+          <label class="field-label" for="iv-k3-comment">机试评语（可随时保存，供面试参考）</label>
+          <textarea id="iv-k3-comment" rows="3" placeholder="对机试表现的评语，面试前 / 面试中均可随时保存"></textarea>
+          <div class="toolbar">
+            <button class="btn small" id="save-k3-comment-btn">保存评语</button>
+            <span class="msg" id="iv-k3-comment-msg" style="color:var(--muted);font-size:12px"></span>
+          </div>
+        </div>
 
         <h3 style="font-size:15px;margin:16px 0 6px">面试评分表（M1 30% / M2 20% / M3 15% / M4 20% / M5 15%，加权满分 5）</h3>
         <div style="overflow:auto">
@@ -646,6 +672,7 @@ function onCampaignChange() {
   currentInterviewSid = null;
   document.getElementById('interview-panel').classList.add('hidden');
   refreshInterviewCandidates();
+  refreshInterviewSlots();
 }
 
 function regCompleteBadge(a) {
@@ -1365,7 +1392,7 @@ async function refreshInterviewCandidates() {
   document.getElementById('interview-error').classList.add('hidden');
   document.getElementById('interview-count').textContent = '';
   if (!cid) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--muted)">请先创建并选择届次</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">请先创建并选择届次</td></tr>';
     return;
   }
   const res = await api(`__PREFIX__/api/campaigns/${cid}/interview/candidates`);
@@ -1376,11 +1403,12 @@ async function refreshInterviewCandidates() {
       <td>${esc(c.name)}</td>
       <td>${esc(c.student_id)}</td>
       <td>${STATUS_LABELS[c.status] || esc(c.status)}</td>
+      <td>${c.booking ? esc(bookingLabel(c.booking)) : '—'}</td>
       <td>${k3Field(c.k3, 'increment_score')}</td>
       <td>${k3Field(c.k3, 'human_rate')}</td>
       <td>${c.interview ? esc(c.interview.level || '—') : '<span style="color:var(--muted)">未面试</span>'}</td>
       <td>${c.interview && c.interview.weighted_total !== null && c.interview.weighted_total !== undefined ? esc(c.interview.weighted_total) : '—'}</td>
-    </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted)">暂无候选考生</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--muted)">暂无候选考生</td></tr>';
   document.getElementById('interview-count').textContent = `共 ${interviewCandidates.length} 人`;
 }
 
@@ -1463,6 +1491,7 @@ async function openInterviewPanel(encodedSid) {
   document.getElementById('interview-panel').classList.remove('hidden');
   document.getElementById('interview-panel-title').textContent = `面试 · ${cand.name || ''}（${sid}）`;
   document.getElementById('interview-brief').innerHTML = '<p class="hint">备课卡加载中…</p>';
+  resetInterviewComment();
   fillInterviewForm(cand.interview || null);
   const res = await api(`__PREFIX__/api/campaigns/${cid}/applications/${encodeURIComponent(sid)}/interview/brief`);
   if (!res.ok) {
@@ -1470,7 +1499,9 @@ async function openInterviewPanel(encodedSid) {
     document.getElementById('interview-brief').innerHTML = `<p class="msg danger">备课卡加载失败：${esc(detail)}</p>`;
     return;
   }
-  renderInterviewBrief(await res.json());
+  const brief = await res.json();
+  renderInterviewBrief(brief);
+  renderInterviewComment(brief);
 }
 
 function closeInterviewPanel() {
@@ -1517,6 +1548,177 @@ async function saveInterview() {
   msgEl.textContent = `已保存 ✓ 等级：${iv.level || '—'}，加权总分：${iv.weighted_total !== null && iv.weighted_total !== undefined ? iv.weighted_total : '—'}`;
   fillInterviewForm(iv);
   refreshInterviewCandidates();
+}
+
+// ── 面试时段管理 ──
+// 后端返回的 ISO8601 时间带 +08:00 偏移，直接按字符串切片取本地钟表时间，避免时区换算偏差
+function slotHm(iso) { return String(iso || '').slice(11, 16); }
+function slotDateLabel(iso) {
+  const s = String(iso || '');
+  return `${Number(s.slice(5, 7))}/${Number(s.slice(8, 10))}`;
+}
+function bookingLabel(b) {
+  if (!b) return '—';
+  return `${slotDateLabel(b.start_at)} ${slotHm(b.start_at)}–${slotHm(b.end_at)}`;
+}
+const BOOKING_MODE_LABELS = { online: '线上', offline: '线下' };
+function bookingModeLabel(mode) { return BOOKING_MODE_LABELS[mode] || ''; }
+
+async function refreshInterviewSlots() {
+  const cid = selectedCid();
+  const el = document.getElementById('slot-list');
+  if (!cid) {
+    el.innerHTML = '<p class="hint">请先创建并选择届次</p>';
+    return;
+  }
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/interview-slots`);
+  if (!res.ok) {
+    el.innerHTML = '<p class="msg danger">时段列表加载失败</p>';
+    return;
+  }
+  const slots = await res.json();
+  if (!Array.isArray(slots) || !slots.length) {
+    el.innerHTML = '<p class="hint">暂无时段，可在上方按日期与窗口批量生成</p>';
+    return;
+  }
+  const groups = {};
+  slots.forEach(s => {
+    const day = String(s.start_at).slice(0, 10);
+    (groups[day] = groups[day] || []).push(s);
+  });
+  el.innerHTML = Object.keys(groups).sort().map(day => `
+    <div class="iv-section-title">${esc(day)}</div>
+    <table>
+      <thead><tr><th>时间</th><th>状态</th><th>备注</th><th>操作</th></tr></thead>
+      <tbody>
+        ${groups[day].map(s => {
+          const booked = s.booked_by !== null && s.booked_by !== undefined;
+          return `<tr>
+            <td style="white-space:nowrap">${slotHm(s.start_at)}–${slotHm(s.end_at)}</td>
+            <td>${booked
+              ? `已约：${esc(s.student_name || '')}（${esc(s.booked_by)}）${bookingModeLabel(s.booked_mode) ? '· ' + esc(bookingModeLabel(s.booked_mode)) : ''}`
+              : '<span style="color:var(--muted)">空闲</span>'}</td>
+            <td>${esc(s.note || '')}</td>
+            <td>${booked
+              ? `<button class="btn small secondary" onclick="unbookSlot(${s.id})">取消预约</button>`
+              : `<button class="btn small danger" onclick="deleteSlot(${s.id})">删除</button>`}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`).join('');
+}
+
+async function generateSlots() {
+  const cid = selectedCid();
+  const msgEl = document.getElementById('slot-gen-msg');
+  msgEl.textContent = '';
+  if (!cid) { msgEl.textContent = '请先选择届次'; return; }
+  const date = document.getElementById('slot-date').value;
+  if (!date) { msgEl.textContent = '请选择日期'; return; }
+  const raw = document.getElementById('slot-windows').value.trim();
+  const windows = [];
+  for (const part of raw.split(/[,，]/).map(s => s.trim()).filter(Boolean)) {
+    const m = part.match(/^([01]?\d|2[0-3]):([0-5]\d)\s*[-–—~]\s*([01]?\d|2[0-3]):([0-5]\d)$/);
+    if (!m) { msgEl.textContent = `时段窗口格式非法：${part}（应为 HH:mm-HH:mm，多个用逗号分隔）`; return; }
+    const start = `${m[1].padStart(2, '0')}:${m[2]}`;
+    const end = `${m[3].padStart(2, '0')}:${m[4]}`;
+    if (start >= end) { msgEl.textContent = `时段窗口开始需早于结束：${part}`; return; }
+    windows.push({ start, end });
+  }
+  if (!windows.length) { msgEl.textContent = '请填写至少一个时段窗口'; return; }
+  const body = {
+    date,
+    windows,
+    slot_minutes: parseInt(document.getElementById('slot-minutes').value, 10),
+    note: document.getElementById('slot-note').value.trim()
+  };
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/interview-slots/generate`, {
+    method: 'POST',
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    msgEl.textContent = '生成失败：' + ((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+    return;
+  }
+  const data = await res.json();
+  msgEl.textContent = `新增 ${data.created} 个，跳过 ${data.skipped} 个重复`;
+  refreshInterviewSlots();
+}
+
+async function deleteSlot(id) {
+  const cid = selectedCid();
+  if (!cid) return;
+  if (!confirm('确认删除该空闲时段？')) return;
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/interview-slots/${id}`, { method: 'DELETE' });
+  if (!res.ok) {
+    alert('删除失败：' + ((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`));
+    return;
+  }
+  refreshInterviewSlots();
+}
+
+async function unbookSlot(id) {
+  const cid = selectedCid();
+  if (!cid) return;
+  if (!confirm('确认取消该时段的预约？取消后该时段恢复空闲，考生可重新预约。')) return;
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/interview-slots/${id}/unbook`, { method: 'POST' });
+  if (!res.ok) {
+    alert('取消预约失败：' + ((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`));
+    return;
+  }
+  refreshInterviewSlots();
+  refreshInterviewCandidates();
+}
+
+// ── 机试评语（随面试面板，可随时保存） ──
+let currentInterviewSessionId = null;
+
+function resetInterviewComment() {
+  currentInterviewSessionId = null;
+  document.getElementById('iv-booking-label').textContent = '—';
+  document.getElementById('iv-k3-comment').value = '';
+  document.getElementById('iv-k3-comment').disabled = true;
+  document.getElementById('save-k3-comment-btn').disabled = true;
+  document.getElementById('iv-k3-comment-msg').textContent = '';
+}
+
+function renderInterviewComment(brief) {
+  currentInterviewSessionId = brief.session_id || null;
+  const booking = brief.booking;
+  document.getElementById('iv-booking-label').textContent = booking
+    ? bookingLabel(booking) + (bookingModeLabel(booking.booked_mode) ? '· ' + bookingModeLabel(booking.booked_mode) : '') + (booking.note ? `（${booking.note}）` : '')
+    : '未预约时段';
+  const ta = document.getElementById('iv-k3-comment');
+  const btn = document.getElementById('save-k3-comment-btn');
+  const msgEl = document.getElementById('iv-k3-comment-msg');
+  ta.value = (brief.k3 && brief.k3.comment) || '';
+  if (currentInterviewSessionId) {
+    ta.disabled = false;
+    btn.disabled = false;
+    msgEl.textContent = '';
+  } else {
+    ta.disabled = true;
+    btn.disabled = true;
+    msgEl.textContent = '该考生无机试会话，无法保存评语';
+  }
+}
+
+async function saveK3Comment() {
+  const cid = selectedCid();
+  const sid = currentInterviewSessionId;
+  if (!cid || !sid) return;
+  const msgEl = document.getElementById('iv-k3-comment-msg');
+  const res = await api(`__PREFIX__/api/campaigns/${cid}/sessions/${sid}/comment`, {
+    method: 'PATCH',
+    body: JSON.stringify({ comment: document.getElementById('iv-k3-comment').value })
+  });
+  if (!res.ok) {
+    msgEl.textContent = '保存失败：' + ((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+    return;
+  }
+  const now = new Date();
+  const p = n => String(n).padStart(2, '0');
+  msgEl.textContent = `已保存 ${p(now.getHours())}:${p(now.getMinutes())}`;
 }
 
 let accountList = [];
@@ -1696,7 +1898,7 @@ function bindTabs() {
       if (btn.dataset.tab === 'tab-sessions') refreshSessions();
       if (btn.dataset.tab === 'tab-questions') refreshQuestions();
       if (btn.dataset.tab === 'tab-review') refreshReviewSessions();
-      if (btn.dataset.tab === 'tab-interview') refreshInterviewCandidates();
+      if (btn.dataset.tab === 'tab-interview') { refreshInterviewCandidates(); refreshInterviewSlots(); }
       if (btn.dataset.tab === 'tab-accounts') refreshAccounts();
     });
   });
@@ -1783,6 +1985,8 @@ document.getElementById('save-score-btn').addEventListener('click', saveScore);
 document.getElementById('refresh-interview-btn').addEventListener('click', refreshInterviewCandidates);
 document.getElementById('interview-panel-close-btn').addEventListener('click', closeInterviewPanel);
 document.getElementById('save-interview-btn').addEventListener('click', saveInterview);
+document.getElementById('slot-generate-btn').addEventListener('click', generateSlots);
+document.getElementById('save-k3-comment-btn').addEventListener('click', saveK3Comment);
 document.getElementById('refresh-accounts-btn').addEventListener('click', refreshAccounts);
 
 fillSelects();
