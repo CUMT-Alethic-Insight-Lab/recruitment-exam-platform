@@ -62,9 +62,9 @@ def _free_slots(client, cid, admin_headers, day):
     return free
 
 
-def _book(client, cid, headers, slot_id, mode="online"):
+def _book(client, cid, headers, slot_id, method="online"):
     return client.post(f"/api/campaigns/{cid}/interview-slots/{slot_id}/book",
-                       json={"mode": mode}, headers=headers)
+                       json={"method": method}, headers=headers)
 
 
 def _slot_rows(cid, day):
@@ -87,11 +87,11 @@ def test_second_slot_conflict_409_and_db_constraint(client, cid, admin_headers):
     _apply_shortlisted(client, cid, admin_headers, "08269401")
     headers = applicant_headers(client, cid, "08269401")
 
-    res = _book(client, cid, headers, free[0]["id"], mode="offline")
+    res = _book(client, cid, headers, free[0]["id"], method="offline")
     assert res.status_code == 200, res.text
 
     # 预约别的槽 → 409 冲突提示
-    res = _book(client, cid, headers, free[1]["id"], mode="online")
+    res = _book(client, cid, headers, free[1]["id"], method="online")
     assert res.status_code == 409
     assert "已有预约" in res.json()["detail"]
     assert "取消" in res.json()["detail"]
@@ -145,9 +145,9 @@ def test_concurrent_double_book_single_winner(client, cid, admin_headers):
     barrier = threading.Barrier(2)
     results = {}
 
-    def race(key, headers, mode):
+    def race(key, headers, method):
         barrier.wait()
-        results[key] = _book(client, cid, headers, slot["id"], mode=mode)
+        results[key] = _book(client, cid, headers, slot["id"], method=method)
 
     t1 = threading.Thread(target=race, args=("a", h1, "online"))
     t2 = threading.Thread(target=race, args=("b", h2, "offline"))
@@ -160,10 +160,11 @@ def test_concurrent_double_book_single_winner(client, cid, admin_headers):
     loser = next(k for k, r in results.items() if r.status_code == 409)
     assert "抢走" in results[loser].json()["detail"]
 
-    # 数据库最终态：该槽仅被一人持有
+    # 数据库最终态：该槽仅被一人持有，且 method 是胜者提交的那一个
     row = next(r for r in _slot_rows(cid, D_RACE) if r["id"] == slot["id"])
     winner_id = "08269403" if winner == "a" else "08269404"
     assert row["booked_by"] == winner_id
+    assert row["method"] == ("online" if winner == "a" else "offline")
     booked = [r for r in _slot_rows(cid, D_RACE) if r["booked_by"] is not None]
     assert len(booked) == 1
 

@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS interview_slot (
     note        TEXT NOT NULL DEFAULT '',
     booked_by   TEXT,
     booked_at   TEXT,
-    booked_mode TEXT,
+    method      TEXT,
     created_at  TEXT NOT NULL,
     UNIQUE (campaign_id, booked_by)
 );
@@ -249,8 +249,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE application ADD COLUMN registration_complete INTEGER NOT NULL DEFAULT 1"
         )
     slot_cols = {r["name"] for r in conn.execute("PRAGMA table_info(interview_slot)")}
-    if "booked_mode" not in slot_cols:
-        conn.execute("ALTER TABLE interview_slot ADD COLUMN booked_mode TEXT")
+    # 面试方式 method（'online' 线上 / 'offline' 线下，未预约为 NULL）：
+    # 旧库该字段原名列 booked_mode，重命名收编；未约槽位无存量需回填
+    if "method" not in slot_cols:
+        if "booked_mode" in slot_cols:
+            conn.execute("ALTER TABLE interview_slot RENAME COLUMN booked_mode TO method")
+        else:
+            conn.execute("ALTER TABLE interview_slot ADD COLUMN method TEXT")
     # 同批次同起点仅允许一个槽：先清历史重复行（保留最早一行），再补唯一索引，
     # 让 generate 并发重放 / 重复插入在数据库层被兜底拦截
     conn.execute(

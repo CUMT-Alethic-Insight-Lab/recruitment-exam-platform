@@ -28,6 +28,8 @@
 .badge.uploaded { background: #e3f6e3; color: #15803d; }
 .badge.voided { background: #fee2e2; color: #b91c1c; }
 .badge.pending_sync { background: #e0e7ff; color: #3730a3; }
+.badge.online { background: #e0e7ff; color: #3730a3; }
+.badge.offline { background: #e3f6e3; color: #15803d; }
 .review-layout { display: flex; gap: 14px; align-items: flex-start; }
 .review-list { width: 280px; flex-shrink: 0; max-height: 65vh; overflow: auto; }
 .review-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: 2px; margin-bottom: 8px; cursor: pointer; background: var(--card); }
@@ -1410,7 +1412,7 @@ async function refreshInterviewCandidates() {
       <td>${esc(c.name)}</td>
       <td>${esc(c.student_id)}</td>
       <td>${STATUS_LABELS[c.status] || esc(c.status)}</td>
-      <td>${c.booking ? esc(bookingLabel(c.booking)) : '—'}</td>
+      <td>${c.booking ? `${esc(bookingLabel(c.booking))} ${bookingModeBadge(c.booking.method)}` : '—'}</td>
       <td>${k3Field(c.k3, 'increment_score')}</td>
       <td>${k3Field(c.k3, 'human_rate')}</td>
       <td>${c.interview ? esc(c.interview.level || '—') : '<span style="color:var(--muted)">未面试</span>'}</td>
@@ -1570,6 +1572,12 @@ function bookingLabel(b) {
 }
 const BOOKING_MODE_LABELS = { online: '线上', offline: '线下' };
 function bookingModeLabel(mode) { return BOOKING_MODE_LABELS[mode] || ''; }
+function bookingModeBadge(mode) {
+  const label = bookingModeLabel(mode);
+  // 白名单外（未约/历史空值）一律显示占位符，不渲染空徽标
+  return label ? `<span class="badge ${esc(mode)}">${esc(label)}</span>`
+               : '<span style="color:var(--muted)">—</span>';
+}
 
 async function refreshInterviewSlots() {
   const cid = selectedCid();
@@ -1596,15 +1604,16 @@ async function refreshInterviewSlots() {
   el.innerHTML = Object.keys(groups).sort().map(day => `
     <div class="iv-section-title">${esc(day)}</div>
     <table>
-      <thead><tr><th>时间</th><th>状态</th><th>备注</th><th>操作</th></tr></thead>
+      <thead><tr><th>时间</th><th>状态</th><th>方式</th><th>备注</th><th>操作</th></tr></thead>
       <tbody>
         ${groups[day].map(s => {
           const booked = s.booked_by !== null && s.booked_by !== undefined;
           return `<tr>
             <td style="white-space:nowrap">${slotHm(s.start_at)}–${slotHm(s.end_at)}</td>
             <td>${booked
-              ? `已约：${esc(s.student_name || '')}（${esc(s.booked_by)}）${bookingModeLabel(s.booked_mode) ? '· ' + esc(bookingModeLabel(s.booked_mode)) : ''}`
+              ? `已约：${esc(s.student_name || '')}（${esc(s.booked_by)}）`
               : '<span style="color:var(--muted)">空闲</span>'}</td>
+            <td>${booked ? bookingModeBadge(s.method) : '<span style="color:var(--muted)">—</span>'}</td>
             <td>${esc(s.note || '')}</td>
             <td>${booked
               ? `<button class="btn small secondary" onclick="unbookSlot('${esc(s.id)}')">取消预约</button>`
@@ -1693,7 +1702,7 @@ function renderInterviewComment(brief) {
   currentInterviewSessionId = brief.session_id || null;
   const booking = brief.booking;
   document.getElementById('iv-booking-label').textContent = booking
-    ? bookingLabel(booking) + (bookingModeLabel(booking.booked_mode) ? '· ' + bookingModeLabel(booking.booked_mode) : '') + (booking.note ? `（${booking.note}）` : '')
+    ? bookingLabel(booking) + (bookingModeLabel(booking.method) ? '· ' + bookingModeLabel(booking.method) : '') + (booking.note ? `（${booking.note}）` : '')
     : '未预约时段';
   const ta = document.getElementById('iv-k3-comment');
   const btn = document.getElementById('save-k3-comment-btn');

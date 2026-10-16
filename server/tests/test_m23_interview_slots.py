@@ -166,26 +166,28 @@ def test_book_success_and_available_view(client, cid, admin_headers):
     data = res.json()
     assert data["eligible"] is True
     assert data["my_booking"] is None
-    # 只含未来时段，taken 不暴露身份
+    # 只含未来时段，taken 不暴露身份；未约槽 method 为空
     day_slots = [s for s in data["slots"] if s["start_at"].startswith(D_BOOK)]
     assert len(day_slots) == 2
-    assert all(set(s.keys()) == {"id", "start_at", "end_at", "note", "taken"}
+    assert all(set(s.keys()) == {"id", "start_at", "end_at", "note",
+                                 "method", "taken"}
                for s in day_slots)
     assert all(s["taken"] is False for s in day_slots)
+    assert all(s["method"] is None for s in day_slots)
 
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/book",
-                      json={"mode": "online"}, headers=headers)
+                      json={"method": "online"}, headers=headers)
     assert res.status_code == 200, res.text
     booking = res.json()
     assert booking["id"] == slot["id"]
     assert booking["start_at"] == slot["start_at"]
     assert booking["booked_at"]
-    assert booking["booked_mode"] == "online"
+    assert booking["method"] == "online"
 
     res = client.get(f"/api/campaigns/{cid}/interview-slots/available", headers=headers)
     data = res.json()
     assert data["my_booking"]["id"] == slot["id"]
-    assert data["my_booking"]["booked_mode"] == "online"
+    assert data["my_booking"]["method"] == "online"
     mine = [s for s in data["slots"] if s["id"] == slot["id"]][0]
     assert mine["taken"] is True
 
@@ -204,10 +206,10 @@ def test_book_second_slot_conflict_409(client, cid, admin_headers):
             if s["start_at"].startswith(D_MULTI) and s["booked_by"] is None]
     assert len(free) >= 2
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{free[0]['id']}/book",
-                      json={"mode": "offline"}, headers=headers)
+                      json={"method": "offline"}, headers=headers)
     assert res.status_code == 200, res.text
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{free[1]['id']}/book",
-                      json={"mode": "offline"}, headers=headers)
+                      json={"method": "offline"}, headers=headers)
     assert res.status_code == 409
     assert res.json()["detail"] == "你已有预约，请先取消再改约"
 
@@ -220,37 +222,46 @@ def test_two_applicants_race_loser_409(client, cid, admin_headers):
     h1 = applicant_headers(client, cid, "08269305")
     h2 = applicant_headers(client, cid, "08269306")
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/book",
-                      json={"mode": "online"}, headers=h1)
+                      json={"method": "online"}, headers=h1)
     assert res.status_code == 200, res.text
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/book",
-                      json={"mode": "offline"}, headers=h2)
+                      json={"method": "offline"}, headers=h2)
     assert res.status_code == 409
     assert res.json()["detail"] == "该时段刚被抢走，请刷新重选"
 
 
-def test_book_mode_required_and_validated(client, cid, admin_headers):
+def test_book_method_required_and_validated(client, cid, admin_headers):
     out = _generate(client, cid, admin_headers, D_MODE)
     slot = out["slots"][0]
     _apply(client, cid, admin_headers, "08269315", status="shortlisted")
     headers = applicant_headers(client, cid, "08269315")
-    # 缺 mode
+    # 缺 method
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/book",
                       json={}, headers=headers)
     assert res.status_code == 400
     assert res.json()["detail"] == "请选择线上或线下面试"
-    # 非法 mode
+    # method 显式为 null 同样拒绝
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/book",
-                      json={"mode": "remote"}, headers=headers)
+                      json={"method": None}, headers=headers)
     assert res.status_code == 400
     assert res.json()["detail"] == "请选择线上或线下面试"
-    # 合法 mode 成功，AdminSlotOut 带 booked_mode
+    # 非法 method
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/book",
-                      json={"mode": "offline"}, headers=headers)
+                      json={"method": "remote"}, headers=headers)
+    assert res.status_code == 400
+    assert res.json()["detail"] == "请选择线上或线下面试"
+    # 合法 method 成功，AdminSlotOut 带 method
+    res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/book",
+                      json={"method": "offline"}, headers=headers)
     assert res.status_code == 200, res.text
-    assert res.json()["booked_mode"] == "offline"
+    assert res.json()["method"] == "offline"
     res = client.get(f"/api/campaigns/{cid}/interview-slots", headers=admin_headers)
     row = [s for s in res.json() if s["id"] == slot["id"]][0]
-    assert row["booked_mode"] == "offline"
+    assert row["method"] == "offline"
+    # 考生侧 available：my_booking 带 method
+    res = client.get(f"/api/campaigns/{cid}/interview-slots/available",
+                     headers=headers)
+    assert res.json()["my_booking"]["method"] == "offline"
 
 
 def test_online_offline_each_book_one(client, cid, admin_headers):
@@ -261,15 +272,15 @@ def test_online_offline_each_book_one(client, cid, admin_headers):
     h1 = applicant_headers(client, cid, "08269316")
     h2 = applicant_headers(client, cid, "08269317")
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{s1['id']}/book",
-                      json={"mode": "online"}, headers=h1)
+                      json={"method": "online"}, headers=h1)
     assert res.status_code == 200, res.text
-    assert res.json()["booked_mode"] == "online"
+    assert res.json()["method"] == "online"
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{s2['id']}/book",
-                      json={"mode": "offline"}, headers=h2)
+                      json={"method": "offline"}, headers=h2)
     assert res.status_code == 200, res.text
-    assert res.json()["booked_mode"] == "offline"
+    assert res.json()["method"] == "offline"
     res = client.get(f"/api/campaigns/{cid}/interview-slots", headers=admin_headers)
-    modes = {s["id"]: s["booked_mode"] for s in res.json()
+    modes = {s["id"]: s["method"] for s in res.json()
              if s["id"] in (s1["id"], s2["id"])}
     assert modes == {s1["id"]: "online", s2["id"]: "offline"}
 
@@ -280,7 +291,7 @@ def test_book_non_shortlisted_403(client, cid, admin_headers):
     _apply(client, cid, admin_headers, "08269307", status="tested")
     headers = applicant_headers(client, cid, "08269307")
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/book",
-                      json={"mode": "online"}, headers=headers)
+                      json={"method": "online"}, headers=headers)
     assert res.status_code == 403
     assert res.json()["detail"] == "当前状态不可预约面试"
 
@@ -299,23 +310,23 @@ def test_cancel_then_rebook(client, cid, admin_headers):
     assert res.status_code == 404
 
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{free[0]['id']}/book",
-                      json={"mode": "online"}, headers=headers)
+                      json={"method": "online"}, headers=headers)
     assert res.status_code == 200, res.text
     res = client.post(f"/api/campaigns/{cid}/interview-slots/mine/cancel",
                       headers=headers)
     assert res.status_code == 200, res.text
     assert res.json() == {"ok": True}
 
-    # 取消后槽恢复空闲（booked_mode 一并清空），可改约另一格
+    # 取消后槽恢复空闲（method 一并清空），可改约另一格
     res = client.get(f"/api/campaigns/{cid}/interview-slots/available", headers=headers)
     assert res.json()["my_booking"] is None
     res = client.get(f"/api/campaigns/{cid}/interview-slots", headers=admin_headers)
     row = [s for s in res.json() if s["id"] == free[0]["id"]][0]
-    assert row["booked_mode"] is None
+    assert row["method"] is None
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{free[1]['id']}/book",
-                      json={"mode": "offline"}, headers=headers)
+                      json={"method": "offline"}, headers=headers)
     assert res.status_code == 200, res.text
-    assert res.json()["booked_mode"] == "offline"
+    assert res.json()["method"] == "offline"
 
 
 def test_past_slot_book_and_cancel_400(client, cid, admin_headers):
@@ -324,7 +335,7 @@ def test_past_slot_book_and_cancel_400(client, cid, admin_headers):
     past = _insert_past_slot(cid, "2020-01-01T10:00:00+08:00",
                              "2020-01-01T10:45:00+08:00")
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{past}/book",
-                      json={"mode": "online"}, headers=headers)
+                      json={"method": "online"}, headers=headers)
     assert res.status_code == 400
 
     # 已约的过去时段：cancel → 400
@@ -355,7 +366,7 @@ def test_delete_booked_409_unbook_then_rebook(client, cid, admin_headers):
     _apply(client, cid, admin_headers, "08269311", status="shortlisted")
     headers = applicant_headers(client, cid, "08269311")
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/book",
-                      json={"mode": "offline"}, headers=headers)
+                      json={"method": "offline"}, headers=headers)
     assert res.status_code == 200, res.text
 
     # 已约槽不可删
@@ -370,16 +381,16 @@ def test_delete_booked_409_unbook_then_rebook(client, cid, admin_headers):
     assert row["booked_by"] == "08269311"
     assert row["student_name"] == "M23考生11"
     assert row["booked_at"]
-    assert row["booked_mode"] == "offline"
+    assert row["method"] == "offline"
 
-    # unbook 后清空（含 booked_mode），考生可再订
+    # unbook 后清空（含 method），考生可再订
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/unbook",
                       headers=admin_headers)
     assert res.status_code == 200, res.text
     data = res.json()
     assert data["booked_by"] is None
     assert data["booked_at"] is None
-    assert data["booked_mode"] is None
+    assert data["method"] is None
     assert data["student_name"] is None
 
     res = client.delete(f"/api/campaigns/{cid}/interview-slots/{slot['id']}",
@@ -389,7 +400,7 @@ def test_delete_booked_409_unbook_then_rebook(client, cid, admin_headers):
     out = _generate(client, cid, admin_headers, D_ADMIN, start="14:00", end="15:00")
     slot2 = out["slots"][0]
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot2['id']}/book",
-                      json={"mode": "online"}, headers=headers)
+                      json={"method": "online"}, headers=headers)
     assert res.status_code == 200, res.text
 
     # 不存在的槽
@@ -463,7 +474,7 @@ def test_candidates_and_brief_include_booking_and_session_id(client, cid,
     sid = _enroll_and_upload(client, cid, "08269313")
     headers = applicant_headers(client, cid, "08269313")
     res = client.post(f"/api/campaigns/{cid}/interview-slots/{slot['id']}/book",
-                      json={"mode": "online"}, headers=headers)
+                      json={"method": "online"}, headers=headers)
     assert res.status_code == 200, res.text
 
     res = client.get(f"/api/campaigns/{cid}/interview/candidates",
@@ -471,7 +482,8 @@ def test_candidates_and_brief_include_booking_and_session_id(client, cid,
     assert res.status_code == 200, res.text
     item = [i for i in res.json() if i["student_id"] == "08269313"][0]
     assert item["booking"] == {"start_at": slot["start_at"],
-                               "end_at": slot["end_at"], "note": slot["note"]}
+                               "end_at": slot["end_at"], "note": slot["note"],
+                               "method": "online"}
 
     res = client.get(f"/api/campaigns/{cid}/applications/08269313/interview/brief",
                      headers=admin_headers)
