@@ -1,4 +1,6 @@
 import collections
+import hashlib
+import hmac
 import json
 import secrets
 import sqlite3
@@ -538,3 +540,57 @@ def submit_project(cid: str, repo_url: str = Form(...),
         row = get_session_or_404(conn, sid)
     archive.trigger(sid)
     return _row_to_out(row)
+
+
+# ---- 机试安装包下载签发（R2 私有 + HMAC 签名 URL，CF Worker 验签）----
+# dl.alethicinsight.com 由 Worker（server/deploy/kit-dl-gate）把守：验签通过才
+# 流式回源私有 bucket。本端点只负责「登录考生 → 短时签名 URL」的签发侧：
+# 限流 + 审计 + 发放窗口开关，签名格式与 Worker 共享（见 sign_kit_url）。
+
+KIT_TOKEN_LIMIT_PER_HOUR = 10
+_kit_token_calls: dict[str, collections.deque] = {}
+
+
+def _check_kit_token_rate(student_id: str) -> None:
+    """与 _check_p2p_key_rate 同款的学号维度内存限流（10 次/小时）。"""
+    now = time.monotonic()
+    calls = _kit_token_calls.setdefault(student_id, collections.deque())
+    while calls and calls[0] <= now - 3600:
+        calls.popleft()
+    if len(calls) >= KIT_TOKEN_LIMIT_PER_HOUR:
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+    calls.append(now)
+
+
+def sign_kit_url(key: str, exp: int) -> str:
+    """与 CF Worker 共享的签名格式：hex(HMAC_SHA256(secret, "{key}\n{exp}"))。"""
+    msg = f"{key}\n{exp}".encode()
+    sig = hmac.new(config.KIT_SIGNING_SECRET.encode(), msg,
+                   hashlib.sha256).hexdigest()
+    return f"{config.KIT_DL_BASE}/{key}?exp={exp}&sig={sig}"
+
+
+@router.post("/{cid}/exam/kit-token")
+def exam_kit_token(cid: str, student_id: str = Depends(require_applicant)):
+    """考生换取机试安装包的短时签名下载 URL（发放窗口外 403，不下发任何地址）。"""
+    if not config.KIT_DOWNLOAD_OPEN:
+        raise HTTPException(status_code=403,
+                            detail="当前不在安装包下载开放时段，请关注招新群通知")
+    if not config.KIT_SIGNING_SECRET:
+        raise HTTPException(status_code=503, detail="kit download unavailable")
+    with db.connection() as conn:
+        get_campaign_or_404(conn, cid)
+        app = conn.execute(
+            "SELECT 1 FROM application WHERE campaign_id = ? AND student_id = ?",
+            (cid, student_id),
+        ).fetchone()
+        if app is None:
+            raise HTTPException(status_code=404, detail="未找到该学号的报名记录")
+    _check_kit_token_rate(student_id)
+    exp = int(time.time()) + config.KIT_URL_TTL_SECONDS
+    with db.connection() as conn:
+        auth.write_audit(conn, student_id, "exam_kit_token", target=cid,
+                         detail=f"kit url signed, exp={exp}")
+    return {"url": sign_kit_url(config.KIT_OBJECT_KEY, exp),
+            "expires_at": exp,
+            "ttl_seconds": config.KIT_URL_TTL_SECONDS}

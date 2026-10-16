@@ -63,6 +63,19 @@ ARCHIVE_ENABLED = os.environ.get("ARCHIVE_ENABLED", "0").strip().lower() \
 ARCHIVE_REPO_DIR = os.environ.get("ARCHIVE_REPO_DIR", "")
 ARCHIVE_GITHUB_TOKEN = os.environ.get("ARCHIVE_GITHUB_TOKEN", "")
 
+# 机试安装包下载签发（R2 转私有 + HMAC 签名 URL，Cloudflare Worker 验签，
+# 见 docs/PROPOSAL_r2_download_gating.md）：dl 域名只认 lab 签的短时签名链接。
+# KIT_SIGNING_SECRET 与 Worker secret 同值（256-bit 随机），未配置时签发端点 503；
+# KIT_DOWNLOAD_OPEN=0 关闭发放窗口（签发 403），替代手工改 HTML 的「暂停下载」。
+KIT_SIGNING_SECRET = os.environ.get("KIT_SIGNING_SECRET", "")
+KIT_DL_BASE = os.environ.get(
+    "KIT_DL_BASE", "https://dl.alethicinsight.com").rstrip("/")
+KIT_OBJECT_KEY = os.environ.get(
+    "KIT_OBJECT_KEY", "AlethicInsight-ExamKit-2026-setup.exe")
+KIT_URL_TTL_SECONDS = int(os.environ.get("KIT_URL_TTL_SECONDS", "21600"))  # 6h
+KIT_DOWNLOAD_OPEN = os.environ.get("KIT_DOWNLOAD_OPEN", "1").strip().lower() \
+    not in ("0", "false", "no", "off")
+
 
 def effective_admin_path() -> str:
     return ADMIN_PUBLIC_PATH or (PUBLIC_PREFIX + "/admin")
