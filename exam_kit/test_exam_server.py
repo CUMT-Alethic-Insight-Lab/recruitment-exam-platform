@@ -2502,6 +2502,78 @@ class TestKitUpdateDownload(unittest.TestCase):
         self.assertEqual(es._friendly_download_error(exc), "白话")
 
 
+class TestKitTokenUrlResolve(unittest.TestCase):
+    """_resolve_kit_download_url：kit-version.json 的 url 为
+    "auth-required:kit-token" 标记时带考生 Bearer 换短时签名 URL；
+    裸 http(s) 直链保持旧行为（旧包过渡期兼容），不发任何云端请求。"""
+
+    def _cfg(self):
+        return dict(es.DEFAULT_CONFIG)
+
+    def _resolve(self, url, auth_token=None, cloud=(200, {"url": ""})):
+        state = {} if auth_token is None else {"auth_token": auth_token}
+        with mock.patch.object(es, "load_state", return_value=state), \
+                mock.patch.object(es, "cloud_request",
+                                  return_value=cloud) as cr:
+            return es._resolve_kit_download_url(self._cfg(), {"url": url}), cr
+
+    def test_bare_url_passthrough_without_cloud_call(self):
+        # 旧格式公开直链：原样返回，绝不调签发端点（旧包兼容）
+        url, cr = self._resolve("https://dl.example.com/kit.exe")
+        self.assertEqual(url, "https://dl.example.com/kit.exe")
+        cr.assert_not_called()
+
+    def test_marker_exchanges_for_signed_url_with_bearer(self):
+        signed = "https://dl.alethicinsight.com/kit.exe?exp=1&sig=ab"
+        url, cr = self._resolve(
+            "auth-required:kit-token", auth_token="tok-123",
+            cloud=(200, {"url": signed}))
+        self.assertEqual(url, signed)
+        cfg = self._cfg()
+        cr.assert_called_once_with(
+            cfg, "POST",
+            f"/api/campaigns/{cfg['campaign_id']}/exam/kit-token",
+            bearer="tok-123")
+
+    def test_marker_without_login_friendly(self):
+        with self.assertRaises(es.CloudError) as cm:
+            self._resolve("auth-required:kit-token", auth_token=None)
+        self.assertTrue(cm.exception.friendly)
+        self.assertIn("登录", str(cm.exception))
+
+    def test_marker_cloud_403_propagates(self):
+        # 窗口关闭/限流等：_parse_cloud_error 透出的 CloudError 原样上抛
+        exc = es.CloudError("当前不在安装包下载开放时段，请关注招新群通知",
+                            status=403)
+        with self.assertRaises(es.CloudError) as cm:
+            self._resolve_err("auth-required:kit-token", auth_token="tok",
+                              err=exc)
+        self.assertEqual(cm.exception.status, 403)
+
+    def _resolve_err(self, url, auth_token=None, err=None):
+        state = {} if auth_token is None else {"auth_token": auth_token}
+        with mock.patch.object(es, "load_state", return_value=state), \
+                mock.patch.object(es, "cloud_request", side_effect=err):
+            return es._resolve_kit_download_url(self._cfg(), {"url": url})
+
+    def test_marker_response_without_http_url_friendly(self):
+        with self.assertRaises(es.CloudError) as cm:
+            self._resolve("auth-required:kit-token", auth_token="tok",
+                          cloud=(200, {"url": "not-a-url"}))
+        self.assertTrue(cm.exception.friendly)
+        self.assertIn("缺失或不正确", str(cm.exception))
+
+    def test_unknown_marker_friendly(self):
+        with self.assertRaises(es.CloudError) as cm:
+            self._resolve("auth-required:other-thing", auth_token="tok")
+        self.assertTrue(cm.exception.friendly)
+
+    def test_empty_url_friendly(self):
+        with self.assertRaises(es.CloudError) as cm:
+            self._resolve("", auth_token="tok")
+        self.assertTrue(cm.exception.friendly)
+
+
 class TestKitUpdateAPI(_LocalServerTestCase):
     """端点：下载成功写 state.downloaded_path；失败白话 502；未检测到时 400。"""
 

@@ -1,0 +1,24 @@
+# kit-dl-gate —— wrangler.toml 草稿（部署前人工确认两处 REPLACE 项）
+# 方案：docs/PROPOSAL_r2_download_gating.md §5.2 / §6；Worker 代码见同目录 worker.js。
+# 部署步骤（CF 侧与 lab 一起做）：
+#   1. R2 bucket 关闭公开访问（转私有后 dl 域名唯一入口就是本 Worker）
+#   2. npx wrangler secret put KIT_SIGNING_SECRET   # 与 lab 环境变量同值，256-bit 随机
+#   3. 确认下面 bucket_name / route 两个 REPLACE 项后：npx wrangler deploy
+#   4. 验证清单见方案 §6 第 5 条（403/206/aria2 续传/审计落库）
+
+name = "kit-dl-gate"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+# 自定义域整站进闸门（REPLACE：zone 名如与主域不同请改）
+[[routes]]
+pattern = "dl.alethicinsight.com/*"
+zone_name = "alethicinsight.com"
+
+# 私有 bucket 绑定（REPLACE：实际 bucket 名）
+[[r2_buckets]]
+binding = "KIT_BUCKET"
+bucket_name = "REPLACE_WITH_PRIVATE_BUCKET_NAME"
+
+# secrets（不入库，用 wrangler secret put 写入）：
+#   KIT_SIGNING_SECRET —— 与 lab 侧同名 env 同值（HMAC-SHA256 签名密钥）

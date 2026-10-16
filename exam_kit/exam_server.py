@@ -1218,14 +1218,33 @@ def _friendly_download_error(exc: CloudError) -> str:
             "稍后再点「下载新版」重试，多次失败请联系组织者。")
 
 
+def _resolve_kit_download_url(cfg: dict, info: dict) -> str:
+    """kit-version.json 的 url 为 "auth-required:kit-token" 时，带考生 Bearer
+    调 lab 签发端点换短时签名 URL（R2 私有 + Worker 验签，见
+    docs/PROPOSAL_r2_download_gating.md）；裸 http(s) 直链保持旧行为（过渡期兼容）。
+    403（窗口关闭/签名过期）等由 cloud_request 的 _parse_cloud_error 透出白话 detail。"""
+    url = str(info.get("url") or "").strip()
+    if url.startswith(("http://", "https://")):
+        return url  # 旧格式：公开直链（Worker 上线前的旧包/旧清单）
+    if url == "auth-required:kit-token":
+        token = str(load_state().get("auth_token") or "")
+        if not token:
+            raise CloudError("请先在机试页面登录后，再下载新版安装包。", friendly=True)
+        _, data = cloud_request(
+            cfg, "POST",
+            f"/api/campaigns/{cfg['campaign_id']}/exam/kit-token", bearer=token)
+        signed = str(data.get("url") or "").strip()
+        if signed.startswith(("http://", "https://")):
+            return signed
+    raise CloudError("新版安装包的下载地址缺失或不正确，请联系组织者处理。",
+                     friendly=True)
+
+
 def download_kit_installer(cfg: dict, info: dict,
                            dest_dir: Path | None = None) -> Path:
     """把新版安装包下载到「下载」文件夹（curl 传输，CF 前置走加固重试通道）。
     sha256 非空时校验，不符即删文件抛白话 CloudError。成功返回落盘路径。"""
-    url = str(info.get("url") or "").strip()
-    if not url.startswith(("http://", "https://")):
-        raise CloudError("新版安装包的下载地址缺失或不正确，请联系组织者处理。",
-                         friendly=True)
+    url = _resolve_kit_download_url(cfg, info)
     dest_dir = Path(dest_dir) if dest_dir is not None else downloads_dir()
     dest_dir.mkdir(parents=True, exist_ok=True)
     name = _sanitize_filename(
