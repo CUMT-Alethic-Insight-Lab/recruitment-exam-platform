@@ -1,259 +1,513 @@
 openapi: 3.1.0
 info:
-  title: Alethic Insight Organization API (DRAFT)
-  version: 0.1.0-draft
+  title: Alethic Insight Organization API MVP
+  version: 0.1.0-mvp
   description: >-
-    NON-PRODUCTION CONTRACT SKELETON. All routes, scopes and schemas are proposed,
-    not yet deployed. Implementers must check actual website authentication and
-    align this spec with server behavior and tests.
+    Local MVP contract; not a production deployment claim. Legacy /api routes
+    remain unchanged. Web uses the existing opaque Bearer session; CLI uses a
+    separate short-lived grant exchanged with a one-time code, NOT OAuth/OIDC.
+    Current account role must be member/admin. CLI cannot issue confirmations
+    or review applications. Verify exact responses against integrated /openapi.json.
 servers:
-  - url: https://example.invalid/api/v1
-    description: Placeholder. Replace after deployment decision.
+  - url: http://127.0.0.1:8901/api/v1
+    description: Isolated local development only
+  - url: /recruitment/api/v1
+    description: Expected public proxy prefix; production deployment requires human approval
 security:
   - bearerAuth: []
 paths:
+  /auth/cli/authorization-requests:
+    post:
+      operationId: authorizeCli
+      summary: Trusted web member authorizes a CLI request
+      x-web-only: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request_id]
+              properties:
+                request_id: {type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$'}
+                scopes:
+                  type: array
+                  maxItems: 16
+                  items: {$ref: '#/components/schemas/Scope'}
+                  description: Defaults to read-only scopes; explicit applications:create permits draft preparation
+      responses:
+        '200':
+          description: Short-lived one-time authorization code; no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, expires_at]
+                properties:
+                  code: {type: string}
+                  expires_at: {type: string, format: date-time}
+        '400': {description: Empty or unsupported scopes}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: request_id already used}
+        '429': {description: Authorization rate limit; Retry-After header}
+  /auth/cli/token:
+    post:
+      operationId: exchangeCliCode
+      summary: Exchange matching request_id and one-time code for an independent CLI grant
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request_id, code]
+              properties:
+                request_id: {type: string, minLength: 16, maxLength: 128}
+                code: {type: string, minLength: 1, maxLength: 128}
+      responses:
+        '200':
+          description: Credential delivery, no-store; never forward to a model or normal logs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, expires_at, scopes]
+                properties:
+                  token: {type: string}
+                  expires_at: {type: string, format: date-time}
+                  scopes: {type: array, items: {$ref: '#/components/schemas/Scope'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /auth/cli/grants:
+    get:
+      operationId: listCliGrants
+      summary: Trusted web member lists own grants
+      x-web-only: true
+      description: Envelope is paginated; bounded limit/cursor support is an integration acceptance requirement.
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Own grants only; no raw tokens or codes
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/Grant'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /auth/cli/grants/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    delete:
+      operationId: revokeCliGrant
+      summary: Trusted web member revokes own grant
+      x-web-only: true
+      responses:
+        '200': {description: Grant revoked, returns ok true}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Not found or not owned}
   /me:
     get:
       operationId: getMe
-      summary: Read minimum identity claims of current member
+      summary: Minimal current member identity; no student_id or recruitment profile
       x-required-scope: profile:read:self
       responses:
-        '200':
-          description: Current user
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CurrentMember'
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        '200': {description: Minimal principal identity and current role}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /capabilities:
     get:
       operationId: getCapabilities
-      summary: List authorized capabilities (not grant permissions)
+      summary: Discover current authorized capabilities, not grant new permissions
       responses:
-        '200':
-          description: Authorized capabilities
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  capabilities:
-                    type: array
-                    items: { type: string }
-                required: [capabilities]
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        '200': {description: Current capabilities and API discovery metadata}
+        '401': {$ref: '#/components/responses/Unauthorized'}
   /projects:
     get:
       operationId: listProjects
-      summary: List projects visible to current member
+      summary: List visible projects
       x-required-scope: projects:read
       parameters:
-        - in: query
-          name: recruiting
-          schema: { type: boolean }
-        - in: query
-          name: limit
-          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
-        - in: query
-          name: cursor
-          schema: { type: string }
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+        - {in: query, name: recruiting, schema: {type: boolean}}
       responses:
         '200':
-          description: Project list
+          description: Visible projects only
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items: { $ref: '#/components/schemas/Project' }
-                  next_cursor:
-                    type: [string, 'null']
-                required: [items, next_cursor]
-        '401': { $ref: '#/components/responses/Unauthorized' }
-  /forms/{kind}/schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/Project'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      operationId: createProject
+      summary: Trusted web admin creates a project
+      x-web-only: true
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ProjectInput'}
+      responses:
+        '201': {description: Created project}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /projects/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
     get:
-      operationId: getFormSchema
-      summary: Get current form definition and its version
+      operationId: getProject
+      summary: Read a visible project
+      x-required-scope: projects:read
+      responses:
+        '200': {description: Visible project}
+        '404': {description: Not found or not visible}
+    patch:
+      operationId: updateProject
+      summary: Trusted web admin updates project fields
+      x-web-only: true
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                slug: {type: string, minLength: 1, maxLength: 80}
+                title: {type: string, minLength: 1, maxLength: 200}
+                description: {type: string, maxLength: 10000}
+                lifecycle: {$ref: '#/components/schemas/Lifecycle'}
+                recruiting: {type: boolean}
+      responses:
+        '200': {description: Updated project}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Project not found}
+  /knowledge/search:
+    get:
+      operationId: searchKnowledge
+      summary: Search authorized document snippets with source metadata
+      x-required-scope: knowledge:read
       parameters:
-        - name: kind
-          in: path
-          required: true
-          schema: { type: string }
+        - {in: query, name: q, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
       responses:
         '200':
-          description: Dynamic form definition
+          description: Authorized search snippets, same ACL as original documents
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/FormDefinition'
-        '401': { $ref: '#/components/responses/Unauthorized' }
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/DocumentSnippet'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '422': {description: Invalid query, limit or cursor}
+  /knowledge/documents/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      operationId: getKnowledgeDocument
+      summary: Read an authorized document with revision and source
+      x-required-scope: knowledge:read
+      responses:
+        '200':
+          description: Document metadata and content
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/DocumentMetadata'}
+                  - type: object
+                    required: [content]
+                    properties:
+                      content: {type: string}
+        '404': {description: Not found or not visible}
+  /forms/project-join/schema:
+    get:
+      operationId: getProjectJoinSchema
+      summary: Current project-join form only, not a generic form catalogue
+      x-required-scope: applications:create
+      responses:
+        '200': {description: 'kind, revision, fields, source_ref, updated_at, additional_fields'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+  /applications/drafts:
+    post:
+      operationId: saveApplicationDraft
+      summary: Save own draft; never return a confirmation token
+      x-required-scope: applications:create
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: '#/components/schemas/DraftInput'}
+                - type: object
+                  properties:
+                    draft_id: {type: [string, 'null'], minLength: 1, maxLength: 200}
+      responses:
+        '201': {$ref: '#/components/responses/ApplicationResult'}
+        '409': {description: Form revision, project or draft state conflict}
+        '422': {description: Invalid form fields}
   /applications/validate:
     post:
       operationId: validateApplication
-      summary: Validate an application draft without persisting or submitting it
+      summary: Validate without persistence, submission or confirmation issuance
       x-required-scope: applications:create
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              properties:
-                kind: { type: string }
-                form_revision: { type: string }
-                fields: { type: object, additionalProperties: true }
-              required: [kind, form_revision, fields]
+            schema: {$ref: '#/components/schemas/DraftInput'}
       responses:
         '200':
-          description: Validated draft and normalized preview; no state was changed
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '422': { description: Validation failed }
-  /applications:
-    get:
-      operationId: listMyApplications
-      summary: List applications of current member only
-      x-required-scope: applications:read:self
-      parameters:
-        - in: query
-          name: mine
-          required: true
-          schema: { type: boolean, const: true }
-        - in: query
-          name: limit
-          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
-        - in: query
-          name: cursor
-          schema: { type: string }
+          description: 'valid, normalized preview, content_hash; NEVER confirmation'
+        '409': {description: Unsupported revision or unavailable project}
+        '422': {description: Invalid fields}
+  /applications/{id}/confirmations:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      operationId: issueApplicationConfirmation
+      summary: Trusted web owner explicitly confirms the persisted draft
+      x-required-scope: applications:create
+      x-web-only: true
       responses:
-        '200':
-          description: Member-owned applications
+        '201':
+          description: Short-lived one-time confirmation bound to principal, draft and content hash
           content:
             application/json:
               schema:
                 type: object
+                required: [confirmation, expires_at, preview]
                 properties:
-                  items:
-                    type: array
-                    items: { $ref: '#/components/schemas/Application' }
-                  next_cursor:
-                    type: [string, 'null']
-                required: [items, next_cursor]
-        '401': { $ref: '#/components/responses/Unauthorized' }
+                  confirmation: {type: string}
+                  expires_at: {type: string, format: date-time}
+                  preview: {$ref: '#/components/schemas/DraftInput'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {description: Draft not found or not owned}
+        '409': {description: Draft is not confirmable}
+  /applications:
+    get:
+      operationId: listMyApplications
+      summary: List only own organization applications, not recruitment applications
+      x-required-scope: applications:read:self
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Cursor'}
+      responses:
+        '200':
+          description: Own applications
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - properties:
+                      items: {type: array, items: {$ref: '#/components/schemas/Application'}}
     post:
       operationId: submitApplication
-      summary: Submit a reviewed and explicitly confirmed application
+      summary: Submit persisted draft with trusted-web confirmation, not direct fields
       x-required-scope: applications:create
       parameters:
-        - name: Idempotency-Key
-          in: header
+        - in: header
+          name: Idempotency-Key
           required: true
-          schema: { type: string, minLength: 12 }
+          schema: {type: string, minLength: 1, maxLength: 200}
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              additionalProperties: false
+              required: [draft_id, confirmation]
               properties:
-                kind: { type: string }
-                form_revision: { type: string }
-                fields: { type: object, additionalProperties: true }
-                confirmation:
-                  type: object
-                  properties:
-                    confirmation_token: { type: string }
-                  required: [confirmation_token]
-              required: [kind, form_revision, fields, confirmation]
+                draft_id: {type: string, minLength: 1, maxLength: 200}
+                confirmation: {type: string, minLength: 1, maxLength: 500}
       responses:
-        '201':
-          description: Successfully submitted (NOT approved)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Application'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '409':
-          description: Confirmation missing or state conflict
+        '201': {$ref: '#/components/responses/ApplicationResult'}
+        '409': {description: Invalid/expired/consumed confirmation, state conflict or idempotency payload mismatch}
+        '422': {description: Missing/invalid Idempotency-Key or payload}
   /applications/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
     get:
-      operationId: getApplication
-      summary: Read self-owned application or assigned reviewer's item
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
+      operationId: getMyApplication
+      summary: Read own application and review history
+      x-required-scope: applications:read:self
       responses:
-        '200':
-          description: Authorized application
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Application'
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { description: Not found or not visible }
+        '200': {$ref: '#/components/responses/ApplicationResult'}
+        '404': {description: Not found or not owned}
+  /applications/{id}/review:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      operationId: reviewApplication
+      summary: Current trusted-web admin reviews an application
+      x-web-only: true
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decision, reason]
+              properties:
+                decision: {type: string, enum: [in_review, needs_information, approved, rejected]}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200': {description: 'id, status, reviewer_id, reason, reviewed_at'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Invalid state transition}
+  /applications/{id}/withdraw:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      operationId: withdrawMyApplication
+      summary: Trusted web owner withdraws an eligible application
+      x-web-only: true
+      x-required-scope: applications:create
+      responses:
+        '200': {$ref: '#/components/responses/ApplicationResult'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {description: Invalid state transition}
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: opaque-or-jwt
+      bearerFormat: opaque
+      description: Existing web session or independent CLI grant, never OAuth/JWT by assumption
+  parameters:
+    Id: {in: path, name: id, required: true, schema: {type: string}}
+    Limit: {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 100}, description: Server defaults vary by collection; clients should request a bounded page}
+    Cursor: {in: query, name: cursor, schema: {type: string}, description: Opaque collection-specific continuation cursor; absent on first page}
   responses:
     Unauthorized:
-      description: Login is required or token is invalid
+      description: Missing, expired, revoked or invalid credentials
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ApiError' }
+          schema: {$ref: '#/components/schemas/HttpError'}
+    Forbidden:
+      description: Current membership, scope, web-only or admin check failed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/HttpError'}
+    ApplicationResult:
+      description: Persisted application; submitted does not mean approved
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Application'}
   schemas:
-    CurrentMember:
+    Scope:
+      type: string
+      enum: ['profile:read:self', 'knowledge:read', 'projects:read', 'applications:read:self', 'applications:create']
+    Page:
       type: object
+      required: [items, next_cursor]
       properties:
-        id: { type: string }
-        display_name: { type: string }
-        member_status: { type: string, enum: [active, inactive] }
-      required: [id, display_name, member_status]
+        items: {type: array, items: {type: object}}
+        next_cursor: {type: [string, 'null']}
+    Grant:
+      type: object
+      required: [id, scopes, created_at, expires_at, revoked_at]
+      properties:
+        id: {type: string}
+        scopes: {type: array, items: {$ref: '#/components/schemas/Scope'}}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        revoked_at: {type: [string, 'null'], format: date-time}
+    Lifecycle:
+      type: string
+      enum: [idea, proposed, approved, recruiting, active, paused, completed, archived]
+    ProjectInput:
+      type: object
+      additionalProperties: false
+      required: [slug, title]
+      properties:
+        slug: {type: string, minLength: 1, maxLength: 80, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'}
+        title: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 10000, default: ''}
+        lifecycle: {$ref: '#/components/schemas/Lifecycle'}
+        recruiting: {type: boolean, default: false}
     Project:
       type: object
+      required: [id, slug, title, description, lifecycle_status, recruiting, visibility, updated_at]
       properties:
-        id: { type: string }
-        title: { type: string }
-        lifecycle_status: { type: string }
-        recruiting: { type: boolean }
-        updated_at: { type: string, format: date-time }
-      required: [id, title, lifecycle_status, recruiting, updated_at]
-    FormDefinition:
+        id: {type: string}
+        slug: {type: string}
+        title: {type: string}
+        description: {type: string}
+        lifecycle_status: {type: string}
+        lifecycle: {type: string}
+        recruiting: {type: boolean}
+        visibility: {type: string}
+        updated_at: {type: string, format: date-time}
+    DocumentMetadata:
       type: object
+      required: [id, title, source_url, revision, updated_at, access_level]
       properties:
-        kind: { type: string }
-        revision: { type: string }
+        id: {type: string}
+        title: {type: string}
+        source_url: {type: string}
+        revision: {type: string}
+        updated_at: {type: string, format: date-time}
+        access_level: {type: string}
+    DocumentSnippet:
+      allOf:
+        - {$ref: '#/components/schemas/DocumentMetadata'}
+        - type: object
+          required: [snippet]
+          properties:
+            snippet: {type: string, maxLength: 240}
+    DraftInput:
+      type: object
+      required: [form_revision, fields]
+      properties:
+        kind: {type: string, const: project-join, default: project-join}
+        form_revision: {type: string, minLength: 1, maxLength: 100}
         fields:
-          type: array
-          items: { type: object, additionalProperties: true }
-        source_ref: { type: string }
-        updated_at: { type: string, format: date-time }
-      required: [kind, revision, fields, source_ref, updated_at]
+          type: object
+          additionalProperties: false
+          required: [project_id, motivation, weekly_hours]
+          properties:
+            project_id: {type: string, minLength: 1, maxLength: 200}
+            motivation: {type: string, minLength: 10, maxLength: 2000}
+            weekly_hours: {type: integer, minimum: 1, maximum: 40}
+            notes: {type: string, maxLength: 2000}
     Application:
       type: object
+      required: [id, kind, form_revision, project_id, status, preview, created_at, updated_at, submitted_at]
       properties:
-        id: { type: string }
-        kind: { type: string }
-        status: { type: string, enum: [draft, submitted, in_review, needs_information, approved, rejected, withdrawn] }
-        form_revision: { type: string }
-        submitted_at: { type: [string, 'null'], format: date-time }
-        updated_at: { type: string, format: date-time }
-        request_id: { type: string }
-      required: [id, kind, form_revision, status, submitted_at, updated_at, request_id]
-    ApiError:
+        id: {type: string}
+        kind: {type: string, const: project-join}
+        form_revision: {type: string}
+        project_id: {type: string}
+        status: {type: string, enum: [draft, submitted, in_review, needs_information, approved, rejected, withdrawn]}
+        preview: {$ref: '#/components/schemas/DraftInput'}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        submitted_at: {type: [string, 'null'], format: date-time}
+        reviews: {type: array, items: {type: object}}
+    HttpError:
       type: object
+      required: [error, request_id]
       properties:
         error:
           type: object
+          required: [code, message, retryable]
           properties:
-            code: { type: string }
-            message: { type: string }
-            retryable: { type: boolean }
-          required: [code, message]
-        request_id: { type: string }
-      required: [error, request_id]
+            code: {type: string}
+            message: {type: string}
+            retryable: {type: boolean}
+            details: {}
+        request_id: {type: string}
+      description: Organization /api/v1 error envelope; legacy /api routes retain the FastAPI detail shape

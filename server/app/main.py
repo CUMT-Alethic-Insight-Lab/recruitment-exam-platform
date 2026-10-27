@@ -7,9 +7,10 @@ import asyncio
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import archive, auth, config, db, maintenance
+from . import archive, auth, config, db, maintenance, org_errors
 from .routes import accounts, applications, auth as auth_routes, booking, campaigns, exam, interview, questions, review, uploads
 from .routes import internal as internal_routes
+from .routes import org_auth, org_content, org_meta, org_requests
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -61,6 +62,9 @@ def render_page(name: str) -> Response:
     if not path.is_file():
         raise HTTPException(status_code=404, detail="页面不存在")
     html = path.read_text(encoding="utf-8")
+    if name == "org.html":
+        html = html.replace('href="css/org.css"', f'href="{config.PUBLIC_PREFIX}/static/css/org.css"')
+        html = html.replace('src="org.js"', f'src="{config.PUBLIC_PREFIX}/static/org.js"')
     html = html.replace(TOPBAR_PLACEHOLDER, render_topbar())
     html = _version_static_urls(html)
     return Response(
@@ -158,6 +162,11 @@ app.include_router(uploads.router)
 app.include_router(review.router)
 app.include_router(booking.admin_router)
 app.include_router(booking.router)
+app.include_router(org_auth.router)
+app.include_router(org_meta.router)
+app.include_router(org_content.router)
+app.include_router(org_requests.router)
+org_errors.install_org_error_handlers(app)
 # 内部收口端点仅 authoritative（lab 权威库）挂载；edge 不暴露
 if not config.IS_EDGE:
     app.include_router(internal_routes.router)
@@ -181,6 +190,14 @@ def login_page():
 @app.get("/account", include_in_schema=False)
 def account_page():
     return render_page("account.html")
+
+
+@app.get("/org", include_in_schema=False)
+def org_page():
+    response = render_page("org.html")
+    response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    response.headers["X-Frame-Options"] = "DENY"
+    return response
 
 
 @app.get("/apply/{cid}", include_in_schema=False)

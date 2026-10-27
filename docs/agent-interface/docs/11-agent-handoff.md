@@ -1,36 +1,35 @@
-# 11 · Coding Agent 执行交接
+# 11 · MVP Coding Agent 集成交接
 
-## 可直接给 Coding Agent 的任务
+## 阅读与范围
 
-你正在参与 Alethic Insight Lab 组织平台项目。先阅读本文件及根目录 README，并依序阅读 `docs/01-*` 到 `docs/10-*`。目标是在**不改写现有官网核心业务、不泄露成员数据**的前提下，开发经过成员认证的 API-first 组织办事接口和 CLI/MCP 工具。
+先读 [00 · 现有系统核实](00-current-system-review.md)、[04 · API](04-api-and-workflows.md)、[09 · 验收](09-roadmap-and-acceptance.md)、[10 · 决策](10-decision-register.md) 和 [运行手册](../../AGENT_INTERFACE_MVP.md)。其他设计文件和 CLI 示例仍可能包含未来命令、OAuth、设备借用及复杂状态机，不能直接当成本次已实现接口。
 
-**第一步只做事实审计，不要盲目开工：**
-- 检查现有 website/GitHub/Gitea 代码库的真实路径、技术栈、认证、数据库、部署、环境变量和反代配置。
-- 检查 `open-onboarding`、`awesome-ai`、`governance-public` 实际来源，区分公开文档与私有数据。
-- 只在有权限的本地/测试环境操作，输出 `inventory`，将无法证实的事项标记为 `UNKNOWN`；不凭推断修改现有生产认证体系。
+本次是现有招新平台的组织接口增量：保留旧 `/api/auth/*`、招新/机试/评审及 exam_kit；新接口内部 `/api/v1`，公网反代预期 `/recruitment/api/v1`。不重写官网、不读取密钥或生产数据、不部署、不自行把 mock 导入真实目录。
 
-**实施方式：**
-- 使用模块化单体 + REST API 核心 + Web 和 CLI 客户端；先做无需任何 LLM 的查询/申请闭环。
-- OpenAPI 是契约源，接口示例要可测；实现最小必要的数据迁移、权限、审计、幂等与错误模型。
-- CLI 优先提供 `auth/login/status/logout`、`--json`、申请预览/提交；MCP 以本地 stdio 为第一版目标。
-- 网站 DeepSeek Agent 与远程 MCP 都是后续可选项，不应成为 MVP 阻塞条件。
-- 支持 GitHub/Gitea，但仅逐仓指定权威源后设置镜像；私有内容不得默认公开同步。
-- 使用现有语言框架和成员熟悉的维护栈；在 N5095 / 4GB 硬件上测资源，不引入不必要的基础服务。
+## 集成所有者检查清单
 
-**安全红线：**
-- 组织 Agent 不是管理者，不能越权审批/调人/改组织章程。
-- Token 不进入 LLM 上下文，不出现在日志和标准输出。
-- API 授权每次服务端验证，不信任 System Prompt/Skill 约束。
-- 模型无法代替真实用户的写入确认；不实现未经授权的自动批量操作。
-- 个人 Agent 的外部模型可能接收上下文；对隐私/内部项目资料默认最小披露。
-- 禁止主分支直接上线不审计的身份/权限变更，不提交密钥和真实成员数据。
+1. 在 `server/app/main.py` 注册新增组织、CLI 授权和事务 router，初始化新增表/索引；具体模块名以合并后的代码为准。不要二次添加 `/recruitment` 或重复 `/api/v1`。静态 `/applications/drafts`、`/applications/validate` 必须不被动态 `{id}` 抢占。
+2. 所有业务入口统一调用 `app.org_auth.require_org_identity(request, scope=None, web_only=False)`；内部 `OrgIdentity` 含 `student_id/role/principal_id/auth_type/scopes`。member/admin 才有组织权限，applicant 拒绝。
+3. 网页管理操作要求 web-only 与当前 admin；CLI scope 不授予 review，旧管理员 session 的 kind 不能覆盖当前降级角色。
+4. 对齐授权码签发、一次性交换、grant 分页/撤销四个固定接口。不要给一次性 code 流程加“OAuth 已完成”的名称。
+5. 对齐项目/知识/表单/draft/validate/confirmation/提交/本人查询/admin review。提交 body 仅 `draft_id + confirmation`；draft/validate 对 CLI 和网页均不隐式签发确认 token。
+6. 对照运行时 `/openapi.json` 核验 [人工 skeleton](../contracts/openapi-skeleton.yaml) 的精确字段、状态码、分页、错误格式、时间格式、确认 payload 与 TTL。人工契约不应声称不存在的路径或 schema。
+7. 对齐 CLI 实际包路径、安装命令、base URL 是服务根还是含 API 前缀、凭据位置、浏览器确认链接和 stdio 启动命令；在运行手册补充实际可执行示例，不把旧命令草案当验证证据。
+8. 确认知识同步是本地受控来源、显式可见级别、无请求内外网爬取；摘要/原文/分页同步应用 ACL。同步脚本的真实文件名、参数与来源约束要和运行手册一致。
+9. 做增量迁移及旧 schema 回归；核查数据回收逻辑不会把组织事务当旧招新报名清除。明确新数据的备份集合与回滚兼容性。
+10. 运行标准全量测试及新增 `test_m31` 之后的独立用例，补真实 HTTP 无模型闭环、CLI/MCP 本地协议测试，填写实际命令/结果，不提前写数字。
 
-**每个 PR 输出：**实现范围与前置、变更文件、OpenAPI 差异、测试命令和结果、所需权限、风险评估、回滚方法、尚未解决的决策 ID。先提交 PR 供人员 Review 后合并部署。
+## 必须保留的安全边界
 
-## 完成标准
+- 身份和权限每次服务端验证，不能靠 Skill、prompt、CLI `--confirm` 或“我是管理员”的文字。
+- 用户在可信网页审阅草稿后才获得短期、一次性且内容绑定的确认；变更内容需重新确认。CLI/MCP 不提供确认签发与 review 工具。
+- 幂等重放和 token 消费必须在事务中协调，重试不重复提交；跨用户幂等键不能复用结果。
+- 不透明 token、code、确认 token 不进源码、URL、普通日志、模型上下文。CLI 的 token exchange 响应不是普通可转发业务 JSON。
+- restricted 招新资料、评审、成绩、联系方式不进入通用搜索/CLI/MCP；无权访问不能靠详情错误泄露内容。
+- 不提供万能 SQL、服务端 shell、任意 URL 抓取、成员全量导出工具。
 
-在测试环境中，新成员可登录；经 Web 和 CLI 查到相同的允许项目信息；通过网页或 CLI 提交同一申请，得到可追踪状态；未授权/已退出成员无法读私有数据；支持个人 Agent 用 CLI/MCP 查询和生成待确认草稿；关闭所有模型推理服务后业务仍正常运行。以上必须附日志或自动化测试的实际证据。
+## 完成交接格式
 
-## 分歧处理
+提交集成结果时分别写明：变更文件、实际 API/CLI 命令、数据迁移、自动测试命令及真实结果、未执行/失败项、人工验证证据、回滚方法、未决决策 ID。代码测试、真实浏览器、Windows/Linux、两种真实 Agent、硬件压测、备份恢复、生产部署分别标注状态。
 
-发现文档与现有系统冲突时先记录证据并提出最小兼容方案；需要改变既有认证、成员权限、审批归属或公开边界时，必须在相关 Decision Record 完成批准后执行。尽可能完成不依赖未决项的工作，不为过度设计阻塞基本使用体验。
+本地 HTTP 或 MCP 协议测试通过不意味着真实 Agent Host、生产 TLS/反代、N5095/4GB 容量或恢复已验证。OAuth/OIDC、Gitea、远程 MCP、官网内置模型不在本次交付。生产操作必须由具备授权的人在审批后执行；主代理负责最终注册、跨模块集成、测试及提交/PR，子模块不自行发布。

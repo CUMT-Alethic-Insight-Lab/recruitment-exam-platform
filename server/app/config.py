@@ -15,6 +15,9 @@ if not SECRET_KEY:
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "00000000")
 
 SESSION_DAYS = int(os.environ.get("SESSION_DAYS", "7"))
+ORG_CLI_TOKEN_SECONDS = max(60, min(3600, int(os.environ.get("ORG_CLI_TOKEN_SECONDS", "900"))))
+ORG_CLI_CODE_SECONDS = max(30, min(600, int(os.environ.get("ORG_CLI_CODE_SECONDS", "300"))))
+ORG_CLI_CODE_ATTEMPTS = 5
 
 STUDENT_ID_REGEX = os.environ.get("STUDENT_ID_REGEX", r"^\d{8}$")
 

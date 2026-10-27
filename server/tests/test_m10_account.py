@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app import auth, config, db
 from app.studentid import parse_student_id
-from conftest import ADMIN_TEST_PASSWORD, applicant_headers, change_password, ensure_admin_password_changed
+from conftest import ADMIN_TEST_PASSWORD, admin_login, applicant_headers, change_password, ensure_admin_password_changed
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -483,8 +483,10 @@ def test_role_change_and_protections(client, cid, admin_headers):
     res = client.post(f"/api/admin/accounts/{config.ADMIN_USERNAME}/role",
                       json={"role": "admin"}, headers=b_headers)
     assert res.status_code == 200, res.text
+    restored_headers = {"Authorization": f"Bearer {admin_login(client).json()['token']}"}
+    admin_headers.update(restored_headers)
     res = client.post(f"/api/admin/accounts/{b}/role", json={"role": "applicant"},
-                      headers=admin_headers)
+                      headers=restored_headers)
     assert res.status_code == 200, res.text
     with db.connection() as conn:
         roles = {r["student_id"]: r["role"] for r in
