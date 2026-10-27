@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>Alethic Insight · 成员事务</title>
+  <link rel="stylesheet" href="css/org.css">
+  <script src="org.js" defer></script>
+</head>
+<body data-prefix="__PREFIX__">
+  <a class="skip" href="#main">跳至主要内容</a>
+  <header>
+    <div><p class="eyebrow">ALETHIC INSIGHT / MEMBERS</p><h1>成员事务</h1></div>
+    <nav aria-label="页面导航"><a href="#projects">项目</a><a href="#knowledge">公开知识</a><a href="#join">加入申请</a><a href="#applications">申请状态</a><a href="#cli">CLI 授权</a><a id="login-link" href="../login">登录 / 切换账号</a></nav>
+  </header>
+  <main id="main">
+    <p class="notice">本页直接使用组织 API，不依赖模型。草稿不是正式申请；只有核对预览并明确确认后才会提交。请勿将网页登录凭据交给 CLI 或外部模型。</p>
+    <p id="global-status" role="status" aria-live="polite">正在核实成员身份…</p>
+    <section aria-labelledby="identity-title"><div class="section-head"><h2 id="identity-title">本人身份与能力</h2><button id="refresh" type="button">重新加载</button></div><div id="identity"></div><ul id="capabilities"></ul></section>
+    <section id="projects" aria-labelledby="projects-title"><h2 id="projects-title">项目目录</h2><div id="project-list" class="cards"></div><button id="projects-more" type="button" hidden>加载更多项目</button></section>
+    <section id="knowledge" aria-labelledby="knowledge-title"><h2 id="knowledge-title">公开知识检索</h2><form id="search-form"><label for="search-query">关键词</label><div class="row"><input id="search-query" name="q" required maxlength="200" type="search"><button type="submit">搜索</button></div></form><p id="search-status" role="status"></p><div id="search-results" class="cards"></div><button id="search-more" type="button" hidden>更多结果</button><article id="document" hidden aria-label="文档正文"></article></section>
+    <section id="join" aria-labelledby="join-title"><h2 id="join-title">项目加入申请</h2><p>先填写并保存草稿，再核对服务端规范化预览。编辑任一字段后，需要重新保存并确认。此处不存储本地草稿，刷新会清空未保存内容。</p><p id="schema-meta"></p><form id="draft-form" novalidate><fieldset id="draft-fields" disabled><legend>申请字段</legend></fieldset><button id="save-draft" type="submit" disabled>保存草稿并校验</button></form><p id="draft-status" role="status"></p><ul id="missing-fields"></ul><h3>规范化预览（尚未提交）</h3><pre id="draft-preview">尚无已校验草稿</pre><form id="submit-form"><label class="check"><input id="confirm-check" type="checkbox" disabled>我已逐项核对以上规范化内容与表单版本，确认向组织正式提交该申请。</label><button id="submit-application" type="submit" disabled>确认并正式提交</button></form></section>
+    <section id="applications" aria-labelledby="applications-title"><div class="section-head"><h2 id="applications-title">本人申请状态</h2><button id="applications-refresh" type="button">刷新状态</button></div><div id="application-list" class="cards"></div><button id="applications-more" type="button" hidden>更多申请</button></section>
+    <section id="admin" aria-labelledby="admin-title" hidden><h2 id="admin-title">管理员工作台（仅网页）</h2><p>仅当前管理员可操作，最终权限和分配关系由服务器校验。</p><h3>项目招募配置</h3><form id="project-config"><label for="config-project">项目</label><select id="config-project" required></select><label class="check"><input id="config-recruiting" type="checkbox">开放项目加入申请</label><button type="submit">保存招募配置</button></form><h3>当前管理员审批池</h3><button id="reviews-refresh" type="button">刷新待办</button><div id="review-list" class="cards"></div><button id="reviews-more" type="button" hidden>更多待办</button><p id="admin-status" role="status"></p></section>
+    <section id="cli" aria-labelledby="cli-title"><h2 id="cli-title">CLI 临时授权</h2><p>只为自己正在使用的 CLI 请求授权。一次性 code 是敏感凭据，仅交回发起请求的 CLI；不要粘贴到聊天或公开页面。本页不会生成或展示网页 Bearer token。</p><form id="cli-form"><label for="cli-request">CLI request_id（可从本页 URL 的 cli_request 带入）</label><input id="cli-request" required minlength="16" maxlength="128" autocomplete="off" spellcheck="false"><label for="cli-scope">授权范围</label><select id="cli-scope"><option value="read">只读：本人身份、项目、公开知识、本人申请</option><option value="apply">只读 + 创建 / 校验申请草稿（正式提交仍须网页确认）</option></select><label class="check"><input id="cli-consent" type="checkbox" required>我确认此请求来自自己的 CLI，并同意授予所选短时权限。</label><button type="submit">生成一次性授权 code</button></form><p id="cli-status" role="status"></p><div id="cli-code-box" hidden><h3>一次性 code</h3><output id="cli-code"></output><p id="cli-expiry"></p><button id="clear-code" type="button">隐藏 code</button></div><h3>我的 CLI 授权</h3><button id="grants-refresh" type="button">刷新授权</button><div id="grant-list" class="cards"></div><button id="grants-more" type="button" hidden>更多授权</button></section>
+  </main>
+  <footer>组织接口 MVP · 申请状态以服务器记录为准 · 无模型依赖</footer>
+</body>
+</html>
