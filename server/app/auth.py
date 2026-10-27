@@ -164,6 +164,11 @@ def lookup_session(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
     if row["expires_at"] <= _utcnow().isoformat():
         conn.execute("DELETE FROM login_session WHERE token_hash = ?", (token_hash,))
         return None
+    acct = conn.execute(
+        "SELECT role FROM account WHERE student_id = ?", (row["student_id"],)
+    ).fetchone()
+    if acct is None or acct["role"] != row["kind"]:
+        return None
     return row
 
 
@@ -177,10 +182,10 @@ def require_admin_session(request: Request) -> sqlite3.Row:
         if row is None or row["kind"] != "admin":
             raise unauthorized()
         acct = conn.execute(
-            "SELECT pw_changed FROM account WHERE student_id = ?",
+            "SELECT pw_changed, role FROM account WHERE student_id = ?",
             (row["student_id"],),
         ).fetchone()
-    if acct is None:
+    if acct is None or acct["role"] != "admin":
         raise unauthorized()
     if not acct["pw_changed"]:
         raise force_password_change()

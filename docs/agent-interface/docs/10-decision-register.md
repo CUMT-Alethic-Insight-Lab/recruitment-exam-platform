@@ -1,40 +1,38 @@
-# 10 · 决策登记表与待确认信息
+# 10 · MVP 决策登记与未决事项
 
-> 这里不是让项目停工的提问清单。未决事项可以先使用 mock 或接口抽象实现，但禁止不经确认接入真实系统，或把假定写成已生效的组织规则。
+> “本次固定”指实现契约，不表示生产已批准或运行已验证。不得用 mock、测试目录或开发默认值代替真实组织制度。
 
-| ID | 待确认事项 | 推荐默认/可行分支 | 为什么重要 | 阻塞什么 |
-|---|---|---|---|---|
-| D01 | 官网当前用什么身份认证？ | **代码已核实**：不透明 Bearer token + 服务端 session；不是 OAuth/OIDC。复用账号认证，新增 CLI 授权，不复用网页 token | CLI 登录和令牌安全 | 真实 CLI 登录 |
-| D02 | 当前成员身份/角色数据由谁维护？ | **部分核实**：`account.role` 是现有角色来源；正式成员资格、项目 ACL 与撤权规则仍需明确 | 避免账号与权责错乱 | ACL/成员变更 |
-| D03 | API 如何可达？独立 HTTPS 域名、同域 `/api`、VPN/内网？ | 现有 `/recruitment/api/*` 经混合云/lab 链路；新 `/api/v1` 的最终入口及写路径待决定 | 客户端连接、证书、运维 | 实际远程调用 |
-| D04 | 第一批真实事务是什么？ | 优先项目报名 + 设备/资源申请，若已有审批流程则照搬 | 对应真实业务而不是示例数据 | 表单 Schema、审批 UI |
-| D05 | 谁审批这些申请？各项有哪些正式条件？ | 从正式制度/负责人访谈确立，不允许 Agent 自行决定 | 组织责任 | 审批流 |
-| D06 | GitHub/Gitea 各项目的权威源？Gitea 是否已安装？ | 公开项目 GH 主、内部 Gitea 主；必须逐仓登记 | 防止镜像冲突/误公开 | 仓库同步 |
-| D07 | 个人 Agent 能读哪些内部数据？ | `member` 低敏默认；`restricted` 默认不允许返回给第三方模型 | 隐私、科研/合作保密 | MCP 数据范围 |
-| D08 | 目标客户端/系统平台？ | 优先 Windows 11 + Ubuntu 24.04 上的 CLI；挑 2 个 Agent 实测 | 减少无意义兼容承诺 | 打包与 MCP |
-| D09 | DB/后端语言已有选型？ | **代码已核实**：FastAPI + Pydantic + SQLite，静态 HTML/JS；沿用该栈，CLI 优先 Python，精确依赖版本需锁定 | 4GB 约束与维护效率 | 技术实现 |
-| D10 | 备份目的地、维护责任人、恢复窗口？ | 默认必须离机备份；人员轮值/联系方式待定 | 单机故障 | 上线验收 |
-| D11 | 要不要官网内置模型？预算周期？ | 非 MVP 必需，后期基于需求再上；¥2/人是讨论量级 | 避免费用与复杂性提前出现 | 可选 Agent |
-| D12 | API/MCP 对外暴露与审计数据保留多久？ | REST 认证访问，MCP 先做本地；日志最小化、保留期需组织规则 | 风险与合规 | 对外服务 |
+## 本次固定的实现决策
 
-## 优先让负责人回答的四件事
+| ID | 决策 | 边界与理由 |
+|---|---|---|
+| D01 | 网页沿用现有不透明 Bearer session；CLI 使用独立短时 grant | 一次性 `request_id + code` 交换，不是 OAuth/OIDC；网页 token 不交 CLI/MCP |
+| D02 | 当前 `account.role` 的 member/admin 具有组织成员权限 | applicant 拒绝；逐请求读取当前角色，不信任 session 旧快照；项目/文档仍需资源可见性检查 |
+| D03 | 应用内部 `/api/v1`；公网预期 `/recruitment/api/v1` | 反代剥离前缀；旧 `/api/*` 与 exam_kit 合约保留，不能全局改名 |
+| D04 | 首个事务只做项目加入 `project-join` | 服务器持久草稿和 schema revision；不宣称设备库存、借用流程或通用表单均已实现 |
+| D05 | 可信网页签发内容绑定的一次性确认，网页当前 admin 审核 | draft/validate 不返回确认 token；CLI 不因 admin 账号得到 review 权限；正式审批责任仍由组织确认 |
+| D07 | 只索引批准的公开/成员低敏资料 | restricted 招新档案、成绩、评语、联系方式和私有代码默认排除；摘要与原文同 ACL |
+| D09 | 沿用 FastAPI/Pydantic/SQLite/vanilla JS | 模块化增量，不新增身份库或部署微服务；CLI/MCP 是适配层 |
+| D12 | 首版本地 stdio MCP，不开远程 MCP | 没有 OAuth discovery/远程传输/真实 Host 兼容性的交付声明；服务端才是授权边界 |
+| D13 | 申请提交 `draft_id + confirmation`，要求幂等头 | 不允许旧草案 `fields` 直提；主体+操作+请求摘要绑定幂等，确认与提交原子处理 |
+| D14 | 列表统一 `{items,next_cursor}` | 项目、知识搜索、申请和 grant 使用有界分页；本次不包含全量成员导出 |
 
-1. **正式成员资格、角色变更和退出撤权由谁维护？**（现有账号角色代码已确认，但组织规则仍需明确）
-2. **第一批要自动化哪两三类实际申请？**（能否发匿名化表单与批准流程）
-3. **数据分级边界？**（普通成员可共享给个人 Agent 的项目资料范围）
-4. **Gitea 与生产运行现状？**（现有 FastAPI/SQLite 和混合云/lab 代码拓扑已确认；生产版本、资源与 Gitea 是否运行仍待核实）
+身份集成约定：`from app.org_auth import OrgIdentity, require_org_identity`；调用 `require_org_identity(request, scope=None, web_only=False)`；返回 `student_id, role, principal_id, auth_type ('web'/'cli'), scopes (frozenset)`。网页管理操作还需 `web_only=True` 且 `role == 'admin'`。这不是向外部响应暴露学号的授权。
 
-回答这些即可大幅减少第一期项目不确定性；其他问题可在开发过程中逐一确认。
+## 仍需负责人确认/验证
 
-## 决策记录模板
+| ID | 未决事项 | 不得擅自假定 | 阻塞范围 |
+|---|---|---|---|
+| D02-ops | 正式成员变更、退出及权限维护责任人 | 当前 role 的实现规则不替代组织成员制度 | 真实成员运营 |
+| D03-ops | 新 `/api/v1` 在混合云/lab 中的写入路由、edge 故障策略 | 旧机试暂存转发不能自动用于新组织事务；edge 不得独立签发权威授权/确认/申请 | 生产发布 |
+| D05-ops | 项目加入的正式条件与审批责任人 | 开发示例不是正式制度；admin 是技术门禁，不证明每位 admin 有组织业务授权 | 真实项目开放 |
+| D06 | Gitea 是否存在、逐仓权威源及同步许可 | 未安装/未核实；本次知识同步不是 GitHub/Gitea 全仓镜像 | 仓库集成 |
+| D07-ops | 可给外部模型的成员资料目录与来源许可 | 内部资料不自动允许发往个人模型；文档中的提示不是权限规则 | 真实知识导入 |
+| D08 | Windows/Linux 和两种真实 Agent 的具体版本与实机结果 | Python/协议测试不等于跨平台安装或真实 Host 已验证 | 客户端验收 |
+| D10 | 离机备份目标、密钥管理、恢复责任、RPO/RTO | 代码目录、exam archive、同盘备份不等于组织事务可恢复 | 生产上线 |
+| D11 | 是否建设官网模型及预算 | 不影响本次无模型闭环；不承诺固定人均服务次数 | 可选模型阶段 |
+| D12-ops | 授权/确认 TTL、审计保留、日志访问与限流部署 | 文档不预填未经实现/实测的安全参数 | 最终集成与运维审核 |
 
-```yaml
-id: D01
-title: CLI authentication authority
-status: proposed # proposed | accepted | superseded
-decision: "<fill after review>"
-rationale: "<grounded technical/organizational reason>"
-owner: "<actual owner>"
-date: null
-links: []
-```
+## 决策更新规则
+
+后续变更必须记录负责人、日期、依据、受影响 API、兼容/数据迁移与回滚策略。固定本地契约不授权生产配置变更；真实数据、远程接口、身份委托、数据公开范围变更必须先人工审查。详见 [验收](09-roadmap-and-acceptance.md) 与 [交接](11-agent-handoff.md)。

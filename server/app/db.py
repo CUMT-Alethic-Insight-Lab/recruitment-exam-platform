@@ -143,6 +143,74 @@ CREATE TABLE IF NOT EXISTS login_session (
     expires_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS org_principal (
+    id TEXT PRIMARY KEY,
+    student_id TEXT NOT NULL UNIQUE REFERENCES account(student_id),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS org_cli_grant (
+    id TEXT PRIMARY KEY,
+    principal_id TEXT NOT NULL REFERENCES org_principal(id),
+    token_hash TEXT NOT NULL UNIQUE,
+    scopes_json TEXT NOT NULL,
+    credential_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS org_cli_authorization (
+    request_id TEXT PRIMARY KEY,
+    principal_id TEXT NOT NULL REFERENCES org_principal(id),
+    code_hash TEXT NOT NULL,
+    scopes_json TEXT NOT NULL,
+    credential_hash TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS org_project (
+    id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+    description TEXT NOT NULL, lifecycle_status TEXT NOT NULL,
+    visibility TEXT NOT NULL, owner_student_id TEXT, recruiting INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS org_document (
+    id TEXT PRIMARY KEY, source_repo TEXT NOT NULL, path TEXT NOT NULL,
+    revision TEXT NOT NULL, visibility TEXT NOT NULL, source_url TEXT NOT NULL,
+    title TEXT NOT NULL, content TEXT NOT NULL, indexed_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL, UNIQUE(source_repo, path)
+);
+
+CREATE TABLE IF NOT EXISTS service_request (
+    id TEXT PRIMARY KEY, applicant_id TEXT NOT NULL, project_id TEXT,
+    kind TEXT NOT NULL, form_revision TEXT NOT NULL, payload_json TEXT NOT NULL,
+    status TEXT NOT NULL, content_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+    submitted_at TEXT, updated_at TEXT NOT NULL, reviewer_id TEXT,
+    review_reason TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS service_request_review (
+    id TEXT PRIMARY KEY, request_id TEXT NOT NULL, reviewer_id TEXT NOT NULL,
+    decision TEXT NOT NULL, reason TEXT NOT NULL, decided_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS org_confirmation (
+    token_hash TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE,
+    principal_id TEXT NOT NULL, content_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL, used_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS org_idempotency (
+    principal_id TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
+    request_hash TEXT NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL,
+    PRIMARY KEY(principal_id, operation, key)
+);
+
 CREATE TABLE IF NOT EXISTS login_attempt (
     key          TEXT PRIMARY KEY,
     fails        INTEGER NOT NULL DEFAULT 0,

@@ -22,6 +22,8 @@ This repository is public so that candidates can **audit the session-cleaning co
 | --- | --- | --- |
 | `server/` | Platform backend and admin console (FastAPI + SQLite + vanilla HTML/JS) | 平台后端与管理端（报名 / 账号 / 问卷 / 面试评审 / 题库抽题 / 交卷暂存转发） |
 | `exam_kit/` | Candidate exam kit, pure Python standard library, plus the installer | 考生机试套件（纯 Python 标准库）与安装器 |
+| `cli/` | Member CLI with short-lived grants | 成员 CLI（独立短时授权、JSON 输出、网页确认） |
+| `mcp_adapter/` | Local stdio MCP adapter using the CLI | 本地 stdio MCP 适配器（只读与草稿，无正式提交/审批工具） |
 | `docs/` | Design and flow documents | 方案文档（`platform_flow.md` 平台流程；`agent-interface/` 成员事务与 Agent 接口设计草案） |
 
 ## Session Cleaning · 会话清洗

@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+alethic_cli/__init__.py
+alethic_cli/__main__.py
+alethic_cli/cli.py
+alethic_cli/client.py
+alethic_cli/credentials.py
+alethic_cli.egg-info/PKG-INFO
+alethic_cli.egg-info/SOURCES.txt
+alethic_cli.egg-info/dependency_links.txt
+alethic_cli.egg-info/entry_points.txt
+alethic_cli.egg-info/top_level.txt

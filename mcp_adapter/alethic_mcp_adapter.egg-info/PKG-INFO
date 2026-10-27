@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: alethic-mcp-adapter
+Version: 0.1.0
+Summary: Local stdio MCP adapter for the Alethic CLI
+Requires-Python: >=3.10

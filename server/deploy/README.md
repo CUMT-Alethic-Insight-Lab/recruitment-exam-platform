@@ -7,6 +7,7 @@
 - 应用入口：`app.main:app`，uvicorn 监听 `127.0.0.1:8901`
 - systemd 单元：`alethic-recruitment.service`（User=www-data）
 - nginx：`/recruitment/` strip 前缀后反代到 8901（片段见 `nginx-recruitment.location.conf`）
+- 组织接口：`/recruitment/api/v1/` 的读写始终回源 lab authoritative，不启用 cloud edge 热备回落；edge 应用层也拒写，避免主体、授权和事务双写。成员网页为 `/recruitment/org`，正式提交/审批响应禁止 iframe 嵌套。
 - 线上真实 vhost 快照：`nginx-alethicinsight.vhost.conf`（云端 `/etc/nginx/sites-available/alethicinsight`
   的 2026-10-16 存档，含 lab_origin 长连接池与热备回落；改线上 nginx 时同步更新此文件）
 - 数据目录：`/var/www/recruitment/data`（sqlite，跨 release 持久，属主 www-data）
