@@ -1,5 +1,0 @@
-Metadata-Version: 2.4
-Name: alethic-cli
-Version: 0.1.0
-Summary: Alethic Insight organization API command-line client
-Requires-Python: >=3.10
