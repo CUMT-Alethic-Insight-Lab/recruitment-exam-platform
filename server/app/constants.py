@@ -50,3 +50,22 @@ APPLICATION_STATUS = [
 ]
 
 CAMPAIGN_STATUS = ["open", "closed"]
+
+# account.role 合法取值（set_role 枚举与校验共用）
+ACCOUNT_ROLES = ["admin", "member", "applicant"]
+
+# account.profile.political_status 政治面貌枚举
+POLITICAL_STATUSES = [
+    "中共党员",
+    "中共预备党员",
+    "共青团员",
+    "民革会员",
+    "民盟盟员",
+    "民建会员",
+    "民进会员",
+    "农工党党员",
+    "致公党党员",
+    "九三学社社员",
+    "台盟盟员",
+    "群众",
+]

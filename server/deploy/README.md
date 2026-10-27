@@ -6,7 +6,16 @@
 
 - 应用入口：`app.main:app`，uvicorn 监听 `127.0.0.1:8901`
 - systemd 单元：`alethic-recruitment.service`（User=www-data）
-- nginx：`/recruitment/` strip 前缀后反代到 8901（片段见 `nginx-recruitment.location.conf`）
+- 站点账号页：`/login`、`/account` 为规范公网入口；nginx 内部 rewrite 至既有
+  `/recruitment/login`、`/recruitment/account` 代理链，旧 URL 仍可用，查询参数不变。
+- nginx：`/recruitment/` strip 前缀后反代到 8901（片段见 `nginx-recruitment.location.conf`）。
+  账号页 API 和资源继续使用 `/recruitment/api/`、`/recruitment/static/`；不要改
+  `PUBLIC_PREFIX=/recruitment`，也不要将认证或成员资料 API 改为官网静态路由。
+- 发布必须同步云端完整 vhost 的账号页 location 并执行 `nginx -t` 后 reload；
+  `push-server.sh` / `push-lab.sh` 仅发布应用，不会自动安装 nginx 配置。
+  若使用 Cloudflare Pages/Worker 前置代理，也须放行 `/login`、`/account` 及其尾斜杠版本，
+  同时继续回源 `/recruitment/*` 和 `/admin/recruitment`，不能让 Pages 的 SPA fallback 吞掉账号页。
+  Pages 配置在官网独立仓，须随官网发布同步核验。
 - 线上真实 vhost 快照：`nginx-alethicinsight.vhost.conf`（云端 `/etc/nginx/sites-available/alethicinsight`
   的 2026-10-16 存档，含 lab_origin 长连接池与热备回落；改线上 nginx 时同步更新此文件）
 - 数据目录：`/var/www/recruitment/data`（sqlite，跨 release 持久，属主 www-data）

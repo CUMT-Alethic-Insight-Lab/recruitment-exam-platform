@@ -229,7 +229,8 @@ def test_profile_nickname_validation(client, cid):
     for ok in ("小明", "Nick_01", "名字·甲", "a-b", "Nick Name 01", "汉Mix_2-x·y"):
         res = client.post("/api/auth/profile", json={"nickname": ok}, headers=headers)
         assert res.status_code == 200, f"{ok!r}: {res.text}"
-        assert res.json() == {"ok": True, "nickname": ok}
+        assert {key: res.json()[key] for key in ("ok", "nickname", "profile")} == {"ok": True, "nickname": ok, "profile": {}}
+        assert res.json()["profile_completed"] is False
 
     # 非法：空、超长、特殊字符、控制字符
     for bad in ("", "   ", "a" * 17, "<script>", "昵称!", "a\nb", "a\tb", "昵/称"):
@@ -479,12 +480,14 @@ def test_role_change_and_protections(client, cid, admin_headers):
     assert roles[a] == "applicant"
     assert roles[b] == "admin"
 
-    # 恢复现场（测试共用同一数据库）：播种管理员复位，乙降回考生
+    # 恢复现场：复位会撤销播种管理员的旧会话，重新登录后再降级乙。
     res = client.post(f"/api/admin/accounts/{config.ADMIN_USERNAME}/role",
                       json={"role": "admin"}, headers=b_headers)
     assert res.status_code == 200, res.text
+    restored_admin = _admin_session(client, config.ADMIN_USERNAME, ADMIN_TEST_PASSWORD)
+    admin_headers.update(restored_admin)  # session 级 fixture 的后续用例也使用新会话
     res = client.post(f"/api/admin/accounts/{b}/role", json={"role": "applicant"},
-                      headers=admin_headers)
+                      headers=restored_admin)
     assert res.status_code == 200, res.text
     with db.connection() as conn:
         roles = {r["student_id"]: r["role"] for r in

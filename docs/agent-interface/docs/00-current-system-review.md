@@ -30,9 +30,9 @@
 
 ### 1. 角色变更与旧会话之间存在撤权缺口
 
-`require_admin_session()` 在 `server/app/auth.py` 中检查 session kind 和账号 `pw_changed`，但不重新检查当前 `account.role`。`set_role()` 只更新角色，没有撤销该账号旧 session。因此管理员被降级后，其尚未过期的 admin session 仍可能通过管理门禁。
+基线 `d3eaf37` 的 `require_admin_session()` 只检查 session kind 和 `pw_changed`，`set_role()` 也不撤销旧 session，管理员降级后旧 admin session 可能继续通过门禁。本 PR 已同步修复：`set_role()` 在实际角色变化时撤销该账号全部会话，管理门禁同时重新检查当前 `account.role`；`test_role_change_revokes_sessions_and_rechecks_current_role` 覆盖降级和遗留会话两条路径。
 
-同样，session 中的 `kind` 是登录时快照，不是当前成员资格；`require_applicant()` 与普通 `/api/auth/me` 路径不能代替统一的成员状态检查。这里属于代码审查结论，修复时必须用真实 HTTP 回归用例验证。
+成员资格、项目 ACL 与未来的客户端 grant 仍需同样的实时撤权语义。session 中的 `kind` 只是登录时快照，`require_applicant()` 与普通 `/api/auth/me` 不能代替统一的成员状态检查；这些后续边界不能因管理员角色修复而视为全部完成。
 
 **最低要求：**
 

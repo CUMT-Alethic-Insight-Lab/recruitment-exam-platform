@@ -19,7 +19,9 @@ TOPBAR_PLACEHOLDER = "__TOPBAR__"
 
 
 def apply_public_prefix(html: str, prefix: str) -> str:
-    return html.replace(PREFIX_PLACEHOLDER, prefix)
+    return (html.replace(f"{PREFIX_PLACEHOLDER}/login", "/login")
+            .replace(f"{PREFIX_PLACEHOLDER}/account", "/account")
+            .replace(PREFIX_PLACEHOLDER, prefix))
 
 
 def apply_admin_path(html: str, admin_path: str) -> str:

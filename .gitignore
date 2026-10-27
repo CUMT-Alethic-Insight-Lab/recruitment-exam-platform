@@ -1,4 +1,11 @@
 .repo-work/
+.learning-system/
+.worktrees/
+webbridge-snap*.out
+docs/*_Agent_Brief.md
+# One-off roster utilities can embed real student IDs, names, classes or positions.
+server/scripts/fill_member_template.py
+server/scripts/normalize_member_profiles.py
 recruitment_materials/
 export_session_example/
 website-spa-proto/

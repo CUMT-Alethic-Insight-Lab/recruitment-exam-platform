@@ -1,5 +1,6 @@
 import base64
 import binascii
+import json
 import re
 from pathlib import Path
 
@@ -8,7 +9,9 @@ from pydantic import BaseModel
 
 from .. import auth, captcha, config, db
 from ..auth import require_applicant
+from ..constants import POLITICAL_STATUSES
 from ..schemas import ApplicantMeOut
+from ..member_profile import trusted_identity, completion_errors, completion_status
 
 router = APIRouter(tags=["auth"])
 
@@ -31,7 +34,8 @@ class ChangePasswordBody(BaseModel):
 
 
 class ProfileBody(BaseModel):
-    nickname: str
+    nickname: str | None = None
+    profile: dict | None = None
 
 
 def _latest_application(conn, student_id: str):
@@ -42,6 +46,15 @@ def _latest_application(conn, student_id: str):
     ).fetchone()
 
 
+def _parse_profile(raw) -> dict:
+    """account.profile JSON 容错解析：坏 JSON / 非 dict 一律回退 {}。"""
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except (ValueError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _account_payload(conn, acct) -> dict:
     data = {
         "role": acct["role"],
@@ -50,12 +63,18 @@ def _account_payload(conn, acct) -> dict:
         "nickname": acct["nickname"],
         "has_avatar": acct["avatar_ext"] is not None,
         "pw_changed": bool(acct["pw_changed"]),
+        "profile": _parse_profile(acct["profile"]),
     }
-    if acct["role"] == "applicant":
-        row = _latest_application(conn, acct["student_id"])
-        data["name"] = row["name"] if row is not None else ""
-        data["cid"] = row["campaign_id"] if row is not None else None
-        data["registration_complete"] = bool(row["registration_complete"]) if row is not None else False
+    # 任意角色只要能查到报名行就带报名信息（member 老成员查不到则 name=''）
+    row = _latest_application(conn, acct["student_id"])
+    if row is not None:
+        data["name"] = row["name"]
+        data["cid"] = row["campaign_id"]
+        data["registration_complete"] = bool(row["registration_complete"])
+    identity = trusted_identity(conn, acct["student_id"])
+    data["name"] = identity["name"]
+    data["member_identity"] = identity
+    data.update(completion_status(conn, acct))
     return data
 
 
@@ -99,6 +118,106 @@ def validate_nickname(raw: str) -> str:
             detail="昵称仅允许中文/字母/数字/中间空格/_/-/·，且首尾不能有空格",
         )
     return value
+
+
+# ---------- 成员资料（account.profile）校验 ----------
+
+_BIRTH_DATE_RE = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
+_PHONE_RE = re.compile(r"1\d{10}")
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_GITHUB_RE = re.compile(r"https?://(www\.)?github\.com/[A-Za-z0-9_-]+(/.*)?")
+_HOMEPAGE_RE = re.compile(r"https?://\S+")
+
+_PROFILE_TEXT_LIMITS = {"college": 40, "class_name": 40, "bio": 100, "meeting_other": 1000}
+_PROFILE_EMAIL_KEYS = ("email", "school_email")
+_MEETING_TOPICS = frozenset({
+    "name_values", "resources", "projects", "membership", "next_recruitment",
+    "getting_started", "time_commitment", "start_project", "credit", "feedback", "other",
+})
+
+_PROFILE_KEYS = frozenset({
+    "birth_date", "political_status", "college", "class_name",
+    "enroll_year", "grad_year", "phone", "email", "school_email",
+    "github", "homepage", "bio", "show_on_site", "meeting_topics", "meeting_other",
+})
+
+
+def _profile_bad(key: str, why: str) -> HTTPException:
+    return HTTPException(status_code=400, detail=f"资料字段 {key} {why}")
+
+
+def _validate_profile_value(key: str, value):
+    if key == "meeting_topics":
+        if not isinstance(value, list) or any(
+                not isinstance(topic, str) or topic not in _MEETING_TOPICS
+                for topic in value):
+            raise _profile_bad(key, "须为合法见面会选项的字符串数组")
+        return value
+    if key == "birth_date":
+        if value == "":
+            return value
+        if not isinstance(value, str) or not _BIRTH_DATE_RE.fullmatch(value):
+            raise _profile_bad(key, "须为 YYYY-MM 格式（如 2004-07）")
+        return value
+    if key == "political_status":
+        if value == "":
+            return value
+        if not isinstance(value, str) or value not in POLITICAL_STATUSES:
+            raise _profile_bad(key, "须为合法政治面貌")
+        return value
+    if key in _PROFILE_TEXT_LIMITS:
+        limit = _PROFILE_TEXT_LIMITS[key]
+        if not isinstance(value, str) or len(value) > limit:
+            raise _profile_bad(key, f"须为不超过 {limit} 字的文本")
+        return value
+    if key in ("enroll_year", "grad_year"):
+        # bool 是 int 子类，先排除
+        if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int)
+                or not 2000 <= value <= 2040):
+            raise _profile_bad(key, "须为 2000-2040 的整数或 null")
+        return value
+    if key == "phone":
+        if value == "":
+            return value
+        if not isinstance(value, str) or not _PHONE_RE.fullmatch(value):
+            raise _profile_bad(key, "须为 1 开头的 11 位手机号")
+        return value
+    if key in _PROFILE_EMAIL_KEYS:
+        if value == "":
+            return value
+        if (not isinstance(value, str) or len(value) > 80
+                or not _EMAIL_RE.fullmatch(value)):
+            raise _profile_bad(key, "须为不超过 80 字符的邮箱")
+        return value
+    if key == "github":
+        if value == "":
+            return value
+        if not isinstance(value, str) or not _GITHUB_RE.fullmatch(value):
+            raise _profile_bad(key, "须为 GitHub 主页链接")
+        return value
+    if key == "homepage":
+        if value == "":
+            return value
+        if (not isinstance(value, str) or len(value) > 200
+                or not _HOMEPAGE_RE.fullmatch(value)):
+            raise _profile_bad(key, "须为 http(s) 链接且不超过 200 字符")
+        return value
+    if key == "show_on_site":
+        if not isinstance(value, bool):
+            raise _profile_bad(key, "须为布尔值")
+        return value
+    raise _profile_bad(key, "不支持")
+
+
+def validate_profile(patch: dict) -> dict:
+    """严格校验 profile 局部更新：未知键 / 值非法一律 400，返回合法键值对。"""
+    out = {}
+    for key, value in patch.items():
+        if key not in _PROFILE_KEYS:
+            raise _profile_bad(key, "不支持")
+        out[key] = _validate_profile_value(key, value)
+    return out
 
 
 def avatar_dir() -> Path:
@@ -164,7 +283,7 @@ def unified_login(body: ApplicantLoginBody):
             raise HTTPException(status_code=401, detail="学号或密码错误")
         auth.clear_login_failures(conn, body.student_id)
         cid = None
-        if acct["role"] == "applicant":
+        if acct["role"] in ("applicant", "member"):
             row = _latest_application(conn, acct["student_id"])
             cid = row["campaign_id"] if row is not None else None
         token = auth.issue_session(conn, acct["role"], cid, acct["student_id"])
@@ -179,16 +298,37 @@ def auth_me(request: Request):
 
 
 @router.post("/api/auth/profile")
+@router.post("/api/auth/profile/complete")
 def update_profile(body: ProfileBody, request: Request):
     _, acct = _get_session(request)
     _require_pw_changed(acct)
-    nickname = validate_nickname(body.nickname)
+    completing = request.url.path.endswith("/complete")
+    if body.nickname is None and body.profile is None and not completing:
+        raise HTTPException(status_code=400, detail="昵称与资料至少提供一项")
+    nickname = validate_nickname(body.nickname) if body.nickname is not None else None
+    patch = validate_profile(body.profile) if body.profile is not None else {}
     with db.connection() as conn:
+        acct = conn.execute("SELECT * FROM account WHERE student_id = ?", (acct["student_id"],)).fetchone()
+        merged = {**_parse_profile(acct["profile"]), **patch}
+        if body.profile is not None:
+            merged.setdefault("show_on_site", False)
+        errors = completion_errors(merged, trusted_identity(conn, acct["student_id"]))
+        if completing and errors:
+            raise HTTPException(status_code=400, detail={"message": "资料尚未完成，请逐项核对", "fields": errors})
+        completed = (completing or bool(acct["profile_completed"])) and not errors
         conn.execute(
-            "UPDATE account SET nickname = ?, updated_at = ? WHERE student_id = ?",
-            (nickname, auth._utcnow().isoformat(), acct["student_id"]),
+            "UPDATE account SET profile = ?, profile_completed = ?, updated_at = ? WHERE student_id = ?",
+            (json.dumps(merged, ensure_ascii=False), int(completed), auth._utcnow().isoformat(), acct["student_id"]),
         )
-    return {"ok": True, "nickname": nickname}
+        if nickname is not None:
+            conn.execute(
+                "UPDATE account SET nickname = ?, updated_at = ? WHERE student_id = ?",
+                (nickname, auth._utcnow().isoformat(), acct["student_id"]),
+            )
+    resp = {"ok": True, "profile": merged, "profile_completed": completed, "profile_errors": errors}
+    if nickname is not None:
+        resp["nickname"] = nickname
+    return resp
 
 
 @router.post("/api/auth/avatar")

@@ -100,8 +100,9 @@ def submit_application(cid: str, body: ApplicationCreate, request: Request):
                 # 已完成注册的报名不允许匿名/他人覆盖（M26）：问卷提交端点本身匿名可达，
                 # 必须校验持有人会话，防止凭学号直接改写他人（含管理员）档案
                 sess = auth.lookup_session(conn, auth.bearer_token(request))
-                if sess is None or sess["kind"] != "applicant" \
-                        or sess["campaign_id"] != cid:
+                if sess is None or sess["kind"] not in ("applicant", "member") \
+                        or (sess["campaign_id"] != cid and not (
+                            sess["kind"] == "member" and sess["campaign_id"] is None)):
                     raise HTTPException(
                         status_code=401,
                         detail="该学号已完成注册，请先登录本人账号后再修改报名信息",
