@@ -168,7 +168,7 @@ def lookup_session(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
 
 
 def require_admin_session(request: Request) -> sqlite3.Row:
-    """管理员会话门禁：pw_changed=0（初始密码）的管理账号改密前一律 403。"""
+    """管理员会话须匹配当前账号角色；初始密码账号改密前一律 403。"""
     token = bearer_token(request)
     if not token:
         raise unauthorized()
@@ -177,10 +177,10 @@ def require_admin_session(request: Request) -> sqlite3.Row:
         if row is None or row["kind"] != "admin":
             raise unauthorized()
         acct = conn.execute(
-            "SELECT pw_changed FROM account WHERE student_id = ?",
+            "SELECT role, pw_changed FROM account WHERE student_id = ?",
             (row["student_id"],),
         ).fetchone()
-    if acct is None:
+    if acct is None or acct["role"] != "admin":
         raise unauthorized()
     if not acct["pw_changed"]:
         raise force_password_change()
@@ -199,8 +199,14 @@ def require_applicant(request: Request, cid: str) -> str:
         raise unauthorized()
     with db.connection() as conn:
         row = lookup_session(conn, token)
-    if row is None or row["kind"] != "applicant":
-        raise unauthorized()
-    if row["campaign_id"] != cid:
-        raise HTTPException(status_code=403, detail="登录会话不属于该批次")
+        if row is None or row["kind"] not in ("applicant", "member"):
+            raise unauthorized()
+        if row["campaign_id"] != cid:
+            # 兼容旧 member 会话（当时未绑定批次），仍须有本人报名记录。
+            if row["kind"] != "member" or row["campaign_id"] is not None:
+                raise HTTPException(status_code=403, detail="登录会话不属于该批次")
+        if row["kind"] == "member" and conn.execute(
+                "SELECT 1 FROM application WHERE campaign_id = ? AND student_id = ?",
+                (cid, row["student_id"])).fetchone() is None:
+            raise HTTPException(status_code=404, detail="未找到报名记录")
     return row["student_id"]

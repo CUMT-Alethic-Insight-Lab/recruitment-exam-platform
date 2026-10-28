@@ -30,6 +30,11 @@
 .badge.pending_sync { background: #e0e7ff; color: #3730a3; }
 .badge.online { background: #e0e7ff; color: #3730a3; }
 .badge.offline { background: #e3f6e3; color: #15803d; }
+.badge.member { background: #e0e7ff; color: #3730a3; }
+/* 账号列表「成员资料」列：资料完整度小圆点（绿=已填写，灰=未填写） */
+.pdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; }
+.pdot.filled { background: #16a34a; }
+.pdot.empty { background: var(--line-strong); }
 .review-layout { display: flex; gap: 14px; align-items: flex-start; }
 .review-list { width: 280px; flex-shrink: 0; max-height: 65vh; overflow: auto; }
 .review-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: 2px; margin-bottom: 8px; cursor: pointer; background: var(--card); }
@@ -409,21 +414,22 @@ __TOPBAR__
 
     <div id="tab-accounts" class="hidden">
       <div class="toolbar">
-        <input type="text" id="account-search" placeholder="按学号/姓名/昵称搜索" oninput="refreshAccounts()">
+        <input type="text" id="account-search" placeholder="按学号/姓名搜索" oninput="refreshAccounts()">
         <select id="account-role-filter" onchange="refreshAccounts()">
           <option value="">全部角色</option>
           <option value="applicant">仅考生</option>
+          <option value="member">仅成员 (member)</option>
           <option value="admin">仅管理员</option>
         </select>
         <button class="btn small secondary" id="refresh-accounts-btn">刷新</button>
         <span class="msg" id="account-count" style="color:var(--muted)"></span>
       </div>
-      <p class="hint">账号与角色在后台统一管理：初始密码为学号，「密码已改 = 未改」表示仍在使用初始密码。「注册完成」仅对考生账号有意义。系统最后一个管理员不可降级，也不可降级当前登录的管理员自己。</p>
+      <p class="hint">账号与角色在后台统一管理：初始密码为学号，「密码已改 = 未改」表示仍在使用初始密码。「注册完成」仅对考生账号有意义。「成员资料」列圆点：绿 = 已完成填报且后端核验通过，灰 = 尚未完成（悬停可看逐项缺失或格式提示）。系统最后一个管理员不可降级，也不可降级当前登录的管理员自己。</p>
       <div style="overflow:auto; max-height:70vh">
         <table>
           <thead>
             <tr>
-              <th>学号</th><th>姓名</th><th>昵称</th><th>角色</th><th>院系</th><th>入学年份</th>
+              <th>学号</th><th>姓名</th><th>角色</th><th>成员资料</th><th>院系</th><th>入学年份</th>
               <th>密码已改</th><th>注册完成</th><th>操作</th>
             </tr>
           </thead>
@@ -1740,9 +1746,15 @@ async function saveK3Comment() {
 let accountList = [];
 
 function accountRoleBadge(role) {
-  return role === 'admin'
-    ? '<span class="badge uploaded">管理员</span>'
-    : '<span class="badge draft">考生</span>';
+  if (role === 'admin') return '<span class="badge uploaded">管理员</span>';
+  if (role === 'member') return '<span class="badge member">成员</span>';
+  return '<span class="badge draft">考生</span>';
+}
+
+function accountProfileDot(a) {
+  return a.profile_completed
+    ? '<span class="pdot filled" title="成员资料已完成填报（核验通过）"></span>'
+    : `<span class="pdot empty" title="${esc('尚未完成填报：' + (Object.values(a.profile_errors || {}).join('；') || '尚未点击完成填报'))}"></span>`;
 }
 
 function accountPwBadge(v) {
@@ -1750,7 +1762,7 @@ function accountPwBadge(v) {
 }
 
 function accountRegBadge(a) {
-  if (a.role === 'admin') return '<span style="color:var(--muted)">—</span>';
+  if (a.role === 'admin' || a.role === 'member') return '<span style="color:var(--muted)">—</span>';
   return (a.registration_complete === 0 || a.registration_complete === false)
     ? '<span class="badge voided">未完成</span>'
     : '<span class="badge uploaded">完整</span>';
@@ -1780,8 +1792,8 @@ async function refreshAccounts() {
     <tr>
       <td>${esc(a.student_id)}</td>
       <td>${esc(a.name)}</td>
-      <td>${esc(a.nickname)}</td>
       <td>${accountRoleBadge(a.role)}</td>
+      <td>${accountProfileDot(a)}</td>
       <td>${esc(a.dept || '')}</td>
       <td>${a.enroll_year === null || a.enroll_year === undefined ? '—' : esc(a.enroll_year)}</td>
       <td>${accountPwBadge(a.pw_changed)}</td>
@@ -1978,10 +1990,14 @@ document.getElementById('login-btn').addEventListener('click', login);
 document.getElementById('password-input').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
 document.getElementById('logout-btn').addEventListener('click', () => {
   fetch('__PREFIX__/api/auth/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + getToken() } })
-    .catch(() => {});
-  clearToken();
-  document.getElementById('pw-card').classList.add('hidden');
-  showLogin();
+    .catch(() => {}).finally(() => {
+      clearToken();
+      localStorage.removeItem('alethic_session');
+      localStorage.removeItem('alethic_student_id');
+      localStorage.removeItem('alethic_cid');
+      localStorage.removeItem('alethic_admin_username');
+      location.href = '/login';
+    });
 });
 document.getElementById('pw-toggle-btn').addEventListener('click', () => {
   document.getElementById('pw-card').classList.toggle('hidden');

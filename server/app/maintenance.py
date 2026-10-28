@@ -48,21 +48,31 @@ def purge_expired(now_iso_str: str | None = None) -> dict:
                 skipped.append(cid)
                 continue
             uploads_dir = Path(config.DATA_DIR) / "uploads" / cid
-            if row["status"] == "closed" and not uploads_dir.exists():
-                skipped.append(cid)  # 已回收过，幂等跳过
+            related = []
+            for table in ("application", "exam_session", "interview_score",
+                          "interview_slot", "login_session", "question"):
+                cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+                if "campaign_id" in cols:
+                    related.append(table)
+            pending = any(conn.execute(
+                f"SELECT 1 FROM {table} WHERE campaign_id = ? LIMIT 1", (cid,)
+            ).fetchone() for table in related)
+            if row["status"] == "closed" and not uploads_dir.exists() and not pending:
+                skipped.append(cid)
                 continue
             if _table_exists(conn, "exam_score"):
                 conn.execute(
                     "DELETE FROM exam_score WHERE session_id IN"
                     " (SELECT id FROM exam_session WHERE campaign_id = ?)", (cid,))
-            conn.execute("DELETE FROM exam_session WHERE campaign_id = ?", (cid,))
-            conn.execute("DELETE FROM application WHERE campaign_id = ?", (cid,))
-            qcols = {r["name"] for r in conn.execute("PRAGMA table_info(question)")}
-            if "campaign_id" in qcols:
-                conn.execute("DELETE FROM question WHERE campaign_id = ?", (cid,))
-            shutil.rmtree(uploads_dir, ignore_errors=True)
+            # 子表先于 application 删除；account 与 membership 是跨批次长期数据，不回收。
+            for table in ("interview_score", "exam_session", "interview_slot",
+                          "login_session", "question", "application"):
+                if table in related:
+                    conn.execute(f"DELETE FROM {table} WHERE campaign_id = ?", (cid,))
             conn.execute("UPDATE campaign SET status = 'closed' WHERE id = ?", (cid,))
             purged.append(cid)
+    for cid in purged:
+        shutil.rmtree(Path(config.DATA_DIR) / "uploads" / cid, ignore_errors=True)
     return {"purged": purged, "skipped": skipped}
 
 

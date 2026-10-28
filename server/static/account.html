@@ -38,8 +38,22 @@
 }
 .profile-name { font-size: 17px; font-weight: 600; }
 .profile-sid, .profile-dept { font-size: 13.5px; color: var(--muted); font-family: var(--font-mono); }
-.nick-row { display: flex; gap: 8px; }
-.nick-row input { flex: 1; }
+
+/* 成员资料卡（① 社团存档 / ② 网页展示） */
+.member-section-title {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em;
+  color: var(--muted); margin: 16px 0 0;
+}
+.member-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
+@media (max-width: 640px) { .member-grid { grid-template-columns: 1fr; } }
+/* style.css 全局表单样式只覆盖 text/number/password/textarea/select，补齐本卡用到的类型 */
+.member-grid input[type=month], .member-grid input[type=email], .member-grid input[type=tel] {
+  width: 100%; padding: 10px 12px;
+  border: 1px solid var(--line-strong); border-radius: 2px;
+  background: var(--input-bg); color: var(--text);
+  font-size: 15px; font-family: var(--font-body);
+  transition: border-color 160ms ease, background 160ms ease;
+}
 
 /* 密码强度条 */
 .pw-meter { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
@@ -162,18 +176,13 @@ __TOPBAR__
         <div class="profile-name" id="profile-name"></div>
         <div class="profile-sid" id="profile-sid"></div>
         <div class="profile-dept" id="profile-dept"></div>
+        <span class="badge applied hidden" id="member-badge" style="margin-top:6px">成员账号</span>
       </div>
     </div>
     <input type="file" id="avatar-input" accept="image/png,image/jpeg,image/webp" class="hidden">
     <p class="msg hidden" id="avatar-msg"></p>
 
-    <label class="field-label" for="nickname">昵称</label>
-    <div class="nick-row">
-      <input type="text" id="nickname" maxlength="16" placeholder="1–16 字符">
-      <button class="btn small" id="nick-save-btn">保存</button>
-    </div>
-    <p class="hint">仅支持中文、字母、数字、空格、_、-、·，首尾不能有空格</p>
-    <p class="msg hidden" id="nick-msg"></p>
+    <p class="hint">姓名由成员名单或已确认报名资料维护，仅供核对；如有误请联系管理员。</p>
 
     <div class="warn-box hidden" id="pw-warn">检测到仍在使用初始密码（= 学号），请尽快修改密码。</div>
     <h2>修改密码</h2>
@@ -191,6 +200,116 @@ __TOPBAR__
     <input type="password" id="pw-new2" autocomplete="new-password">
     <button class="btn" id="pw-save-btn">确认修改</button>
     <p class="msg hidden" id="pw-msg"></p>
+  </div>
+
+  <div class="card" id="member-card">
+    <h2 style="margin-top:0">成员资料</h2>
+    <p class="hint">请按原始成员导入模板填写。保存草稿不代表完成；必需资料及可信姓名学号全部核验通过后，才能完成填报。出生年月、政治面貌、学院班级、年份、手机号及邮箱仅作私密存档，不会公开。</p>
+    <div id="member-identity" class="hint"></div>
+    <p id="member-completion" role="status"></p>
+    <div class="warn-box hidden" id="member-pw-hint">请先修改初始密码后再填写成员资料。</div>
+
+    <div class="member-section-title">① 社团存档（不公开）</div>
+    <div class="member-grid">
+      <div>
+        <label class="field-label" for="member-birth-date">出生年月</label>
+        <input type="month" id="member-birth-date">
+      </div>
+      <div>
+        <label class="field-label" for="member-political">政治面貌</label>
+        <select id="member-political">
+          <option value="">请选择</option>
+          <option>中共党员</option>
+          <option>中共预备党员</option>
+          <option>共青团员</option>
+          <option>民革会员</option>
+          <option>民盟盟员</option>
+          <option>民建会员</option>
+          <option>民进会员</option>
+          <option>农工党党员</option>
+          <option>致公党党员</option>
+          <option>九三学社社员</option>
+          <option>台盟盟员</option>
+          <option>群众</option>
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="member-college">所在学院</label>
+        <input type="text" id="member-college" maxlength="40" placeholder="如：计算机科学与技术学院/人工智能学院">
+      </div>
+      <div>
+        <label class="field-label" for="member-class">所在班级（专业全称＋年级-班级）</label>
+        <input type="text" id="member-class" maxlength="40" placeholder="如：智能采矿工程2021-1班">
+      </div>
+      <div>
+        <label class="field-label" for="member-enroll-year">入学年份</label>
+        <input type="number" id="member-enroll-year" min="2000" max="2040" step="1" placeholder="如：2024">
+      </div>
+      <div>
+        <label class="field-label" for="member-grad-year">预计毕业年份</label>
+        <input type="number" id="member-grad-year" min="2000" max="2040" step="1" placeholder="如：2028">
+      </div>
+      <div>
+        <label class="field-label" for="member-phone">手机号</label>
+        <input type="tel" id="member-phone" maxlength="11" placeholder="11 位手机号">
+      </div>
+    </div>
+
+    <div class="member-section-title">私密联系方式（不公开）</div>
+    <p class="hint">至少填写一个邮箱：优先常用邮箱，其次学校邮箱。</p>
+    <div class="member-grid">
+      <div>
+        <label class="field-label" for="member-email">常用邮箱（优先）</label>
+        <input type="email" id="member-email" maxlength="80" placeholder="name@example.com">
+      </div>
+      <div>
+        <label class="field-label" for="member-school-email">学校邮箱</label>
+        <input type="email" id="member-school-email" maxlength="80" placeholder="name@stu.xxx.edu.cn">
+      </div>
+    </div>
+    <div class="member-section-title">② 网页展示（全部可选，仅授权以下个人主页、GitHub、简介；无需创建账号）</div>
+    <div class="member-grid">
+      <div>
+        <label class="field-label" for="member-github">GitHub 主页</label>
+        <input type="text" id="member-github" placeholder="https://github.com/用户名">
+      </div>
+      <div>
+        <label class="field-label" for="member-homepage">个人主页</label>
+        <input type="text" id="member-homepage" placeholder="https://…">
+      </div>
+    </div>
+    <label class="field-label" for="member-bio">一句话简介（≤100 字，将展示在成员页）</label>
+    <input type="text" id="member-bio" maxlength="100" placeholder="一句话介绍自己">
+    <label style="font-size:14px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;margin-top:12px">
+      <input type="checkbox" id="member-show-on-site"> 我授权在官网成员页展示公开资料（默认不展示）
+    </label>
+
+    <section id="member-meeting-section" aria-labelledby="member-meeting-title">
+      <div class="member-section-title" id="member-meeting-title">③ 见面会内容征集（非必填，不公开）</div>
+      <p>这次周日晚的见面会，你想听到哪些内容？（可多选）</p>
+      <div style="display:grid;gap:8px;font-size:14px">
+        <label><input type="checkbox" name="meeting_topics" value="name_values"> 社团名称、核心理念和做事方法</label>
+        <label><input type="checkbox" name="meeting_topics" value="resources"> 社团能提供哪些资源、指导和交流机会</label>
+        <label><input type="checkbox" name="meeting_topics" value="projects"> 有哪些项目、竞赛或研究可以参与，怎么加入</label>
+        <label><input type="checkbox" name="meeting_topics" value="membership"> 社团成员和实验室成员分别有哪些安排与要求</label>
+        <label><input type="checkbox" name="meeting_topics" value="next_recruitment"> 下学期的筛选和招新安排</label>
+        <label><input type="checkbox" name="meeting_topics" value="getting_started"> 基础不多、方向没定，现阶段可以从哪里开始</label>
+        <label><input type="checkbox" name="meeting_topics" value="time_commitment"> 课程学习与社团任务怎么兼顾，通常需要投入多少时间</label>
+        <label><input type="checkbox" name="meeting_topics" value="start_project"> 有自己的想法，怎么发起项目、找队友或申请支持</label>
+        <label><input type="checkbox" name="meeting_topics" value="credit"> 项目成果怎么署名，成员的贡献怎么认定</label>
+        <label><input type="checkbox" name="meeting_topics" value="feedback"> 对社团的安排有建议或异议，可以怎么提出和讨论</label>
+        <label><input type="checkbox" name="meeting_topics" value="other"> 其他：自由文本</label>
+      </div>
+      <label class="field-label" for="member-meeting-other">其他想听的内容（可空，最多 1000 字）</label>
+      <textarea id="member-meeting-other" maxlength="1000" rows="3"></textarea>
+      <p class="hint">其他内容可以独立填写，无需勾选「其他」；全不选并清空文本后保存即可清除回答。</p>
+    </section>
+
+    <div>
+      <button class="btn secondary" id="member-save-btn">保存草稿</button>
+      <button class="btn" id="member-complete-btn">完成填报</button>
+      <p class="msg hidden" id="member-msg"></p>
+    </div>
   </div>
 
   <div class="card hidden" id="project-card">
@@ -268,8 +387,10 @@ const EXAM_MODE_LABELS = {
   standard: '标准机试', own_project: '个人项目（GitHub 仓库直提）', free_creation: '领域内自由发挥'
 };
 
-const token = localStorage.getItem(STUDENT_TOKEN_KEY);
-const studentId = localStorage.getItem(STUDENT_ID_KEY);
+const ADMIN_TOKEN_KEY = 'alethic_admin_token';
+const tokenKey = localStorage.getItem(ADMIN_TOKEN_KEY) ? ADMIN_TOKEN_KEY : STUDENT_TOKEN_KEY;
+const token = localStorage.getItem(tokenKey);
+let studentId = localStorage.getItem(STUDENT_ID_KEY) || localStorage.getItem('alethic_admin_username');
 let cid = localStorage.getItem(CID_KEY) || '';
 let profileName = '';
 
@@ -312,14 +433,11 @@ function renderAvatar(has) {
 }
 
 function renderProfile(me) {
-  profileName = me.nickname || me.name || studentId;
+  profileName = me.name || '姓名待确认';
   document.getElementById('profile-name').textContent = profileName;
   document.getElementById('profile-sid').textContent = `学号 ${me.student_id || studentId}`;
-  const sid = me.student_id || studentId || '';
-  const dept = /^\d{8}$/.test(sid) ? sid.slice(0, 2) : '';
-  const enrollYear = /^\d{8}$/.test(sid) ? 2000 + parseInt(sid.slice(2, 4), 10) : '';
-  document.getElementById('profile-dept').textContent = dept ? `院系 ${dept} · ${enrollYear} 级` : '';
-  document.getElementById('nickname').value = me.nickname || '';
+  const p = me.profile || {};
+  document.getElementById('profile-dept').textContent = [p.college, p.enroll_year ? `${p.enroll_year} 年入学` : ''].filter(Boolean).join(' · ');
   renderAvatar(!!me.has_avatar);
 }
 
@@ -335,11 +453,11 @@ function setForcedPwMode(on) {
   warn.classList.toggle('hidden', !on);
   document.getElementById('app-info').classList.toggle('hidden', on);
   document.getElementById('reg-incomplete-banner').classList.add('hidden');
-  document.getElementById('guide-card').classList.toggle('hidden', on);
+  document.getElementById('guide-card').classList.toggle('hidden', on || !cid);
   document.getElementById('project-card').classList.add('hidden');
   document.getElementById('booking-card').classList.add('hidden');
-  document.getElementById('nickname').disabled = on;
-  document.getElementById('nick-save-btn').disabled = on;
+  document.getElementById('member-pw-hint').classList.toggle('hidden', !on);
+  setMemberFormDisabled(on);
   const wrap = document.getElementById('avatar-wrap');
   wrap.style.pointerEvents = on ? 'none' : '';
   wrap.style.opacity = on ? '.55' : '';
@@ -352,17 +470,19 @@ async function loadMe() {
       headers: { 'Authorization': 'Bearer ' + token }
     });
     if (res.status === 401) {
-      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      localStorage.removeItem(tokenKey);
       location.replace('__PREFIX__/login');
       return null;
     }
     if (!res.ok) return null;
     const me = await res.json();
-    if (me.cid !== undefined && me.cid !== null && String(me.cid) !== cid) {
-      cid = String(me.cid);
-      localStorage.setItem(CID_KEY, cid);
-    }
+    studentId = me.student_id;
+    localStorage.setItem(STUDENT_ID_KEY, studentId);
+    cid = me.role === 'admin' || me.cid == null ? '' : String(me.cid);
+    if (cid) localStorage.setItem(CID_KEY, cid);
+    else localStorage.removeItem(CID_KEY);
     renderProfile(me);
+    renderMemberProfile(me);
     setForcedPwMode(me.pw_changed === false);
     return me;
   } catch (e) {
@@ -374,6 +494,7 @@ async function loadApplication() {
   const errEl = document.getElementById('load-error');
   errEl.classList.add('hidden');
   const box = document.getElementById('app-info');
+  if (!cid) { box.innerHTML = ''; return; } // 成员账号等无届次上下文：app-info 留空即正常
   const res = await fetch(`__PREFIX__/api/campaigns/${encodeURIComponent(cid)}/applications/${encodeURIComponent(studentId)}`, {
     headers: { 'Authorization': 'Bearer ' + token }
   });
@@ -425,48 +546,115 @@ function randomSaltHex() {
   return bytesToHex(b);
 }
 
-// ---------- 昵称 ----------
-function validateNickname(raw) {
-  const s = String(raw == null ? '' : raw).trim();
-  if (!s) return '昵称不能为空';
-  if ([...s].length > 16) return '昵称最长 16 个字符';
-  if (/[\x00-\x1f\x7f]/.test(s)) return '昵称不能包含控制字符';
-  if (!/^[\u4e00-\u9fffA-Za-z0-9 _\-·]+$/.test(s)) return '昵称仅支持中文、字母、数字、空格、_、-、·';
+// ---------- 成员资料 ----------
+// [输入框 id, profile 键]：文本用空串清除，年份用 null 清除。
+const MEMBER_FIELDS = [
+  ['member-birth-date', 'birth_date'],
+  ['member-political', 'political_status'],
+  ['member-college', 'college'],
+  ['member-class', 'class_name'],
+  ['member-enroll-year', 'enroll_year'],
+  ['member-grad-year', 'grad_year'],
+  ['member-phone', 'phone'],
+  ['member-email', 'email'],
+  ['member-school-email', 'school_email'],
+  ['member-github', 'github'],
+  ['member-homepage', 'homepage'],
+  ['member-bio', 'bio'],
+  ['member-meeting-other', 'meeting_other']
+];
+
+function meetingTopicInputs() {
+  return document.querySelectorAll('#member-meeting-section input[name="meeting_topics"]');
+}
+
+function setMemberFormDisabled(on) {
+  for (const [id] of MEMBER_FIELDS) document.getElementById(id).disabled = on;
+  meetingTopicInputs().forEach(input => { input.disabled = on; });
+  document.getElementById('member-show-on-site').disabled = on;
+  document.getElementById('member-save-btn').disabled = on;
+  document.getElementById('member-complete-btn').disabled = on;
+}
+
+function renderCompletion(data) {
+  document.getElementById('member-completion').textContent = data.profile_completed
+    ? '已完成填报（后端核验通过）'
+    : '尚未完成填报。' + Object.values(data.profile_errors || {}).join('；');
+}
+
+function renderMemberProfile(me) {
+  const p = me.profile || {};
+  for (const [id, key] of MEMBER_FIELDS) {
+    document.getElementById(id).value = p[key] == null ? '' : String(p[key]);
+  }
+  const topics = Array.isArray(p.meeting_topics) ? p.meeting_topics : [];
+  meetingTopicInputs().forEach(input => { input.checked = topics.includes(input.value); });
+  document.getElementById('member-show-on-site').checked = p.show_on_site === true;
+  const identity = me.member_identity || {};
+  document.getElementById('member-identity').textContent = `姓名（只读核对）：${identity.name || '待管理员确认'} ｜ 学号（只读）：${identity.student_id || '待确认'} ｜ 社团：${identity.club_name || '待确认'} ｜ 职位（管理员维护）：${identity.club_position || '尚未确认，不影响其他资料填报'}。序号由后台导出维护；姓名有误请联系管理员，不以昵称代替。`;
+  renderCompletion(me);
+  // 成员账号（role=member 且无届次上下文）：无报名信息属正常情况，徽标说明身份
+  document.getElementById('member-badge').classList.toggle('hidden', !(me.role === 'member' && !cid));
+}
+
+function validateMemberProfile(profile) {
+  if (profile.bio && [...profile.bio].length > 100) return '一句话简介不能超过 100 字';
+  if (profile.meeting_other && [...profile.meeting_other].length > 1000) return '其他想听的内容不能超过 1000 字';
+  for (const key of ['enroll_year', 'grad_year']) {
+    if (profile[key] != null && !/^\d{4}$/.test(profile[key])) {
+      return key === 'enroll_year' ? '入学年份须为 4 位年份，如 2024' : '预计毕业年份须为 4 位年份，如 2028';
+    }
+    if (profile[key] != null) {
+      const y = Number(profile[key]);
+      if (!(y >= 2000 && y <= 2040)) {
+        return key === 'enroll_year' ? '入学年份须在 2000-2040 之间' : '预计毕业年份须在 2000-2040 之间';
+      }
+      profile[key] = y; // 后端要求整数
+    }
+  }
+  if (profile.phone && !/^1\d{10}$/.test(profile.phone)) return '手机号须为 1 开头的 11 位数字';
+  for (const key of ['email', 'school_email']) {
+    if (profile[key] && (profile[key].length > 80 || !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(profile[key]))) return '邮箱格式不正确';
+  }
   return '';
 }
 
-async function saveNickname() {
-  const nick = document.getElementById('nickname').value.trim();
-  const err = validateNickname(nick);
-  if (err) { showMsg('nick-msg', err, true); return; }
-  const btn = document.getElementById('nick-save-btn');
-  btn.disabled = true;
+async function saveMemberProfile(complete = false) {
+  showMsg('member-msg', '', false);
+  const profile = {};
+  for (const [id, key] of MEMBER_FIELDS) {
+    const v = document.getElementById(id).value.trim();
+    profile[key] = v === '' && ['enroll_year', 'grad_year'].includes(key) ? null : v;
+  }
+  profile.meeting_topics = [...meetingTopicInputs()].filter(input => input.checked).map(input => input.value);
+  profile.show_on_site = document.getElementById('member-show-on-site').checked;
+  const err = validateMemberProfile(profile);
+  if (err) { showMsg('member-msg', err, true); return; }
+  setMemberFormDisabled(true);
   try {
-    const res = await fetch('__PREFIX__/api/auth/profile', {
+    const res = await fetch('__PREFIX__/api/auth/profile' + (complete ? '/complete' : ''), {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nickname: nick })
+      body: JSON.stringify({ profile })
     });
     if (res.status === 401) {
-      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      localStorage.removeItem(tokenKey);
       location.replace('__PREFIX__/login');
       return;
     }
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      showMsg('nick-msg', (typeof data.detail === 'string' && data.detail) || '昵称格式不正确', true);
+      const fields = data.detail && data.detail.fields;
+      if (fields) renderCompletion({profile_completed: false, profile_errors: fields});
+      showMsg('member-msg', fields ? Object.values(fields).join('；') : (typeof data.detail === 'string' && data.detail) || '保存失败，请稍后重试', true);
       return;
     }
-    const data = await res.json();
-    document.getElementById('nickname').value = data.nickname;
-    profileName = data.nickname || profileName;
-    document.getElementById('profile-name').textContent = profileName;
-    renderAvatar(hasAvatar);
-    showMsg('nick-msg', '昵称已保存', false);
+    renderCompletion(data);
+    showMsg('member-msg', data.profile_completed ? '已完成填报（后端核验通过）' : '草稿已保存，尚未完成填报；请核对上方逐项提示后点击完成填报。', false);
   } catch (e) {
-    showMsg('nick-msg', '无法连接服务器，请检查网络后重试', true);
+    showMsg('member-msg', '无法连接服务器，请检查网络后重试', true);
   } finally {
-    btn.disabled = false;
+    setMemberFormDisabled(forcedPwMode);
   }
 }
 
@@ -513,7 +701,7 @@ async function uploadAvatar(file) {
       body: fd
     });
     if (res.status === 401) {
-      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      localStorage.removeItem(tokenKey);
       location.replace('__PREFIX__/login');
       return;
     }
@@ -682,6 +870,7 @@ async function submitProject() {
 
 async function loadAuthMe() {
   // 开考二选一：自有项目提交卡对所有考生可见；own_project 考生默认突出它（隐藏机试指引卡）
+  if (!cid) return; // 成员账号无届次上下文：跳过，页面保持默认展示
   const projectCard = document.getElementById('project-card');
   const guideCard = document.getElementById('guide-card');
   let me = null;
@@ -749,7 +938,7 @@ async function fetchAvailable() {
     headers: { 'Authorization': 'Bearer ' + token }
   });
   if (res.status === 401) {
-    localStorage.removeItem(STUDENT_TOKEN_KEY);
+    localStorage.removeItem(tokenKey);
     location.replace('__PREFIX__/login');
     return null;
   }
@@ -759,6 +948,7 @@ async function fetchAvailable() {
 async function loadBooking() {
   const card = document.getElementById('booking-card');
   if (forcedPwMode) { card.classList.add('hidden'); stopBookingPolling(); return; }
+  if (!cid) { card.classList.add('hidden'); stopBookingPolling(); return; } // 成员账号无届次上下文
   const data = await fetchAvailable();
   if (!data) { card.classList.add('hidden'); stopBookingPolling(); return; }
   bookingData = data;
@@ -972,7 +1162,7 @@ async function submitBooking() {
       body: JSON.stringify({ method })
     });
     if (res.status === 401) {
-      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      localStorage.removeItem(tokenKey);
       location.replace('__PREFIX__/login');
       return;
     }
@@ -1026,7 +1216,7 @@ async function cancelBooking() {
       headers: { 'Authorization': 'Bearer ' + token }
     });
     if (res.status === 401) {
-      localStorage.removeItem(STUDENT_TOKEN_KEY);
+      localStorage.removeItem(tokenKey);
       location.replace('__PREFIX__/login');
       return;
     }
@@ -1065,12 +1255,16 @@ async function logout() {
       headers: { 'Authorization': 'Bearer ' + token }
     });
   } catch (e) { /* 网络失败也照常清理本地会话 */ }
+  localStorage.removeItem(ADMIN_TOKEN_KEY);
   localStorage.removeItem(STUDENT_TOKEN_KEY);
   localStorage.removeItem(STUDENT_ID_KEY);
+  localStorage.removeItem(CID_KEY);
+  localStorage.removeItem('alethic_admin_username');
   location.href = '__PREFIX__/login';
 }
 
-document.getElementById('nick-save-btn').addEventListener('click', saveNickname);
+document.getElementById('member-save-btn').addEventListener('click', () => saveMemberProfile(false));
+document.getElementById('member-complete-btn').addEventListener('click', () => saveMemberProfile(true));
 document.getElementById('avatar-wrap').addEventListener('click', () => document.getElementById('avatar-input').click());
 document.getElementById('avatar-input').addEventListener('change', e => {
   const file = e.target.files && e.target.files[0];
@@ -1081,11 +1275,11 @@ document.getElementById('pw-new').addEventListener('input', updateMeter);
 document.getElementById('pw-save-btn').addEventListener('click', changePassword);
 document.getElementById('logout-btn').addEventListener('click', logout);
 
-if (!token || !studentId) {
+if (!token) {
   location.replace('__PREFIX__/login');
 } else {
   loadMe().then(me => {
-    if (me && me.pw_changed === false) return; // 强制改密模式：改密成功后再加载其余内容
+    if (!me || me.pw_changed === false) return; // 强制改密模式：改密成功后再加载其余内容
     loadApplication();
     loadAuthMe();
     loadBooking();

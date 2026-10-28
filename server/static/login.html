@@ -120,9 +120,9 @@
 __TOPBAR__
 <main class="login-shell">
   <div class="login-inner">
-    <p class="eyebrow"><span class="eyebrow-index">01 /</span> RECRUITMENT · ACCESS</p>
+    <p class="eyebrow"><span class="eyebrow-index">01 /</span> ACCOUNT · ACCESS</p>
     <h1 class="login-title">登录</h1>
-    <p class="login-lede">使用学号登录；首次登录密码即学号本身。报名前请先填写报名问卷。</p>
+    <p class="login-lede">使用学号登录 Alethic Insight 账号，管理个人资料与账号安全。首次登录请修改初始密码。</p>
 
     <div class="card login-card" id="login-card">
       <label class="field-label" for="student_id">学号</label>
@@ -133,11 +133,11 @@ __TOPBAR__
 
       <button class="btn block" id="login-btn">登录</button>
       <p class="msg danger hidden" id="login-error"></p>
-      <p class="hint">还没有账号？<a id="apply-link">去报名</a>（填写报名问卷即自动建档）</p>
-      <p class="hint hidden" id="apply-hint">当前没有开放报名的届次</p>
+      <p class="hint">参加招新？<a id="apply-link">去报名</a>（填写报名问卷即自动建档；已有成员账号可直接登录）</p>
+      <p class="hint hidden" id="apply-hint">当前没有开放报名的届次，不影响已有账号登录。</p>
     </div>
 
-    <p class="login-meta"><b>Alethic Insight</b> · 招新平台 · 学号即账号</p>
+    <p class="login-meta"><b>Alethic Insight</b> · 账号中心 · 学号即账号</p>
   </div>
 </main>
 
@@ -213,7 +213,7 @@ function showWelcome(data) {
   const textEl = document.getElementById('welcome-text');
   const subEl = document.getElementById('welcome-sub');
 
-  const display = data.nickname || data.name || data.student_id || '';
+  const display = data.name || data.student_id || '';
   const initial = [...display][0] || '学';
   avatarBox.textContent = '';
   if (data.has_avatar) {
@@ -240,7 +240,7 @@ function showWelcome(data) {
   }
   subEl.textContent = data.pw_changed === false
     ? '首次登录，请先修改初始密码…'
-    : (data.role === 'admin' ? '正在进入管理端…' : '正在进入个人中心…');
+    : (loginDestination(data.role).split(/[?#]/)[0] === '__ADMIN_PATH__' ? '正在进入管理端…' : '正在进入个人中心…');
 
   overlay.classList.remove('hidden');
   // 动画出现的同时就给逃生口：随时可关，不会被罩住
@@ -254,8 +254,25 @@ function showWelcome(data) {
   });
 }
 
+function loginDestination(role) {
+  const fallback = '__PREFIX__/account';
+  const next = new URLSearchParams(location.search).get('next');
+  if (!next || !next.startsWith('/') || next.startsWith('//') || /[\\\x00-\x20\x7f]/.test(next)) return fallback;
+  try {
+    const url = new URL(next, location.origin);
+    if (url.origin !== location.origin) return fallback;
+    if (url.pathname === fallback || url.pathname === '/recruitment/account') {
+      return fallback + url.search + url.hash;
+    }
+    if (role === 'admin' && (url.pathname === '__ADMIN_PATH__' || url.pathname === '/recruitment/admin')) {
+      return '__ADMIN_PATH__' + url.search + url.hash;
+    }
+  } catch (err) {}
+  return fallback;
+}
+
 function gotoAfterLogin(role) {
-  var dest = role === 'admin' ? '__ADMIN_PATH__' : '__PREFIX__/account';
+  var dest = loginDestination(role);
   window.__loginDest = dest;
   // 主跳转：欢迎动效播完即走
   setTimeout(function () { location.href = dest; }, 1400);
@@ -348,7 +365,7 @@ document.getElementById('student_id').addEventListener('keydown', e => { if (e.k
 loadLatestOpenCampaign();
 
 // 已登录态：先拿残留 token 去服务端验真，绝不盲信本地残留。
-// 有效 → 按身份进；失效 → 清掉留在表单页；全程不弹欢迎动画。
+// 有效 → 按明确 next 或默认个人中心进入；失效 → 清掉留在表单页；全程不弹欢迎动画。
 async function resumeSession() {
   var adminToken = null, studentToken = null, sid = null;
   try {
@@ -364,7 +381,8 @@ async function resumeSession() {
     });
     if (!res.ok) throw new Error('invalid session');
     var me = await res.json();
-    location.replace(me.role === 'admin' ? '__ADMIN_PATH__' : '__PREFIX__/account');
+    localStorage.setItem(STUDENT_ID_KEY, me.student_id);
+    location.replace(loginDestination(me.role));
   } catch (err) {
     try {
       localStorage.removeItem(ADMIN_TOKEN_KEY);

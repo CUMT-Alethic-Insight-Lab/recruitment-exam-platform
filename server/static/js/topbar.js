@@ -1,7 +1,7 @@
 /* 招新站统一顶栏逻辑（随 _topbar.html 注入各页）：
    1. 主题：localStorage 'theme'（与官网同键），无则跟系统；
    2. 旧键迁移：aletnic_*（历史拼写）→ alethic_*，一次性搬运；
-   3. 登录态：读统一键 → GET /api/auth/me → 渲染昵称/入口/退出。 */
+   3. 登录态：读统一键 → GET /api/auth/me → 渲染姓名/入口/退出。 */
 (function () {
   'use strict';
 
@@ -78,7 +78,7 @@
     authBox.innerHTML = '';
     var login = document.createElement('a');
     login.className = 'topbar-btn primary';
-    login.href = PREFIX + '/login';
+    login.href = '/login';
     login.textContent = '登录';
     authBox.appendChild(login);
     // 有开放届次才显示报名入口
@@ -99,19 +99,21 @@
     authBox.innerHTML = '';
     var name = document.createElement('span');
     name.className = 'topbar-user';
-    var display = me.nickname || me.name || me.student_id || '';
+    var display = me.name || me.student_id || '';
     name.textContent = me.role === 'admin' ? '管理员' : ('欢迎，' + display);
     authBox.appendChild(name);
     var center = document.createElement('a');
     center.className = 'topbar-btn';
-    if (me.role === 'admin') {
-      center.href = ADMIN_PATH;
-      center.textContent = '管理端';
-    } else {
-      center.href = PREFIX + '/account';
-      center.textContent = '个人中心';
-    }
+    center.href = '/account';
+    center.textContent = '个人中心';
     authBox.appendChild(center);
+    if (me.role === 'admin') {
+      var admin = document.createElement('a');
+      admin.className = 'topbar-btn';
+      admin.href = ADMIN_PATH;
+      admin.textContent = '管理端';
+      authBox.appendChild(admin);
+    }
     var out = document.createElement('button');
     out.className = 'topbar-btn';
     out.type = 'button';
@@ -122,7 +124,7 @@
         headers: { Authorization: 'Bearer ' + token }
       }).catch(function () {}).finally(function () {
         clearSession();
-        location.href = PREFIX + '/';
+        location.href = '/login';
       });
     });
     authBox.appendChild(out);

@@ -3,7 +3,17 @@ from contextlib import contextmanager
 
 from . import config
 
-SCHEMA = """
+# 独立、只由受信名单维护；允许名单先于账号存在，不随报名批次回收。
+MEMBERSHIP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS membership (
+    student_id TEXT PRIMARY KEY NOT NULL,
+    name       TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+
+SCHEMA = MEMBERSHIP_SCHEMA + """
 CREATE TABLE IF NOT EXISTS campaign (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
@@ -126,6 +136,7 @@ CREATE TABLE IF NOT EXISTS account (
     student_id  TEXT PRIMARY KEY,
     role        TEXT NOT NULL DEFAULT 'applicant',
     nickname    TEXT NOT NULL DEFAULT '',
+    profile     TEXT NOT NULL DEFAULT '{}',
     avatar_ext  TEXT,
     pw_salt     TEXT,
     pw_hash     TEXT,
@@ -266,6 +277,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_interview_slot_campaign_start"
         " ON interview_slot (campaign_id, start_at)"
     )
+    acct_cols = {r["name"] for r in conn.execute("PRAGMA table_info(account)")}
+    if "profile" not in acct_cols:
+        conn.execute("ALTER TABLE account ADD COLUMN profile TEXT NOT NULL DEFAULT '{}'")
+    if "real_name" not in acct_cols:
+        conn.execute("ALTER TABLE account ADD COLUMN real_name TEXT NOT NULL DEFAULT ''")
+    if "profile_completed" not in acct_cols:
+        conn.execute("ALTER TABLE account ADD COLUMN profile_completed INTEGER NOT NULL DEFAULT 0")
+    member_cols = {r["name"] for r in conn.execute("PRAGMA table_info(membership)")}
+    if "club_position" not in member_cols:
+        conn.execute("ALTER TABLE membership ADD COLUMN club_position TEXT NOT NULL DEFAULT ''")
     _migrate_account(conn)
 
 
